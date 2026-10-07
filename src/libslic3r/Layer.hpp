@@ -31,6 +31,7 @@ class PrintRegion;
 class PrintRegionConfig;
 class PrintObject;
 class Print;
+struct VoronoiInfillCache;
 
 namespace FillAdaptive {
     struct Octrees;
@@ -208,7 +209,7 @@ public:
     void                    make_perimeters();
     // Phony version of make_fills() without parameters for Perl integration only.
     void                    make_fills() { this->make_fills(nullptr, nullptr); }
-    void                    make_fills(const FillAdaptive::Octrees* adaptive_fill_octrees, const FillAdaptive::Octrees* support_fill_octrees, FillLightning::Generator* lightning_generator = nullptr);
+    void                    make_fills(const FillAdaptive::Octrees* adaptive_fill_octrees, const FillAdaptive::Octrees* support_fill_octrees, FillLightning::Generator* lightning_generator = nullptr, VoronoiInfillCache *voronoi_cache = nullptr);
     Polylines               generate_sparse_infill_polylines_for_anchoring(const FillAdaptive::Octrees *adaptive_fill_octrees,
                                                                            const FillAdaptive::Octrees *support_fill_octrees,
                                                                            FillLightning::Generator* lightning_generator) const;
