@@ -1,21 +1,18 @@
 #include <catch2/catch_all.hpp>
 #include <array>
-#include <algorithm>
-#include <cmath>
-#include <vector>
 #include <limits>
 #include <memory>
-#include <optional>
-#include "libslic3r/Fill/VoronoiPointCloud.hpp"
-#include "libslic3r/BridgeDetector.hpp"
 #include <utility>
 
 #include "libslic3r/Fill/FillVoronoi.hpp"
+#include "libslic3r/Fill/VoronoiWallDistance.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Surface.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
 
 using namespace Slic3r;
+
+#include "libslic3r/BridgeDetector.hpp"
 
 TEST_CASE("Voronoi routes whole native floor zigzags from the previous path endpoint", "[FillVoronoi]")
 {
@@ -279,6 +276,37 @@ TEST_CASE("Worker-local Voronoi caches survive temporary fillers and isolate clo
     const size_t after_clone = provider->queries;
     REQUIRE(next.fill_surface(&surface, params) == expected);
     REQUIRE(provider->queries == after_clone);
+}
+
+TEST_CASE("Voronoi wall distribution reduces material through native extrusion", "[FillVoronoi]")
+{
+    const ExPolygons outlines {ExPolygon{Point::new_scale(-40., -40.), Point::new_scale(40., -40.),
+                                        Point::new_scale(40., 40.), Point::new_scale(-40., 40.)}};
+    auto field = std::make_shared<Voronoi::CubicWallDistance>(std::vector<Voronoi::WallSlice>{{-100., 100., &outlines}});
+    FillVoronoi uniform, biased;
+    const Voronoi::WallDistanceSamples distance = [field](const auto &points) { return field->sample_fields(points); };
+    std::shared_ptr<const Voronoi::PointCloudProvider> cloud = std::make_shared<Voronoi::WallDistancePointCloud>(distance);
+    biased.set_point_cloud(std::move(cloud));
+    FillParams params;
+    params.density = 0.2f;
+    params.flow = Flow(0.45f, 0.2f, 0.4f);
+    params.using_internal_flow = true;
+    for (auto *filler : {&uniform, &biased}) {
+        filler->set_bounding_box(outlines.front().contour.bounding_box());
+        filler->spacing = params.flow.spacing();
+        filler->angle = 0.f;
+        filler->z = 4.;
+        filler->layer_id = 20;
+    }
+    Surface surface(stInternal, outlines.front());
+    ExtrusionEntityCollection original, thinned, repeat;
+    uniform.fill_surface_extrusion(&surface, params, original.entities);
+    biased.fill_surface_extrusion(&surface, params, thinned.entities);
+    REQUIRE_FALSE(thinned.entities.empty());
+    REQUIRE(thinned.total_volume() > 0.);
+    REQUIRE(thinned.total_volume() < original.total_volume());
+    biased.fill_surface_extrusion(&surface, params, repeat.entities);
+    REQUIRE_THAT(repeat.total_volume(), Catch::Matchers::WithinAbs(thinned.total_volume(), EPSILON));
 }
 
 namespace {

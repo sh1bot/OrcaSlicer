@@ -8,7 +8,6 @@
 #include <limits>
 #include <memory>
 #include <map>
-#include <tuple>
 #include <utility>
 #include <vector>
 #include <cstddef>
@@ -50,7 +49,6 @@ private:
 
 // Each worker keeps its own engines while processing ascending layer batches.
 struct VoronoiInfillCache {
-    std::map<std::tuple<double, double, double>, std::shared_ptr<const Voronoi::PointCloudProvider>> rotated_clouds;
     std::map<std::shared_ptr<const Voronoi::PointCloudProvider>, std::shared_ptr<VoronoiInfill>> clouds;
 };
 

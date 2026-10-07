@@ -28,11 +28,11 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "ExtrusionEntity.hpp"
 #include "Fill.hpp"
-#include "FillVoronoi.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
 #include "FillAdaptive.hpp"
 #include "FillRectilinear.hpp"
 #include "FillLightning.hpp"
+#include "FillVoronoi.hpp"
 #include "FillConcentricInternal.hpp"
 #include "FillTpmsD.hpp"
 #include "FillTpmsFK.hpp"
@@ -312,6 +312,8 @@ struct SurfaceFillParams
     // For Gyroid: when true, use the parameterized "optimized" wave.
     bool gyroid_optimized = false;
     double voronoi_cloud_angle = 0.;
+    double voronoi_wall_decay = 0.;
+    double voronoi_smoothing_sigma = 0.;
 
     // Orca: corner smoothing factor in the range [0, 1].
     double      smooth_factor { 0. };
@@ -355,6 +357,8 @@ struct SurfaceFillParams
 		RETURN_COMPARE_NON_EQUAL(skin_infill_depth);
         RETURN_COMPARE_NON_EQUAL(infill_overhang_angle);
 		RETURN_COMPARE_NON_EQUAL(gyroid_optimized);
+        RETURN_COMPARE_NON_EQUAL(voronoi_wall_decay);
+        RETURN_COMPARE_NON_EQUAL(voronoi_smoothing_sigma);
         RETURN_COMPARE_NON_EQUAL(smooth_factor);
         RETURN_COMPARE_NON_EQUAL(center_of_surface_pattern);
         RETURN_COMPARE_NON_EQUAL(separated_infills);
@@ -389,27 +393,21 @@ struct SurfaceFillParams
                 this->separated_infills       == rhs.separated_infills &&
                 this->gyroid_optimized        == rhs.gyroid_optimized        &&
                 this->voronoi_cloud_angle      == rhs.voronoi_cloud_angle      &&
+                this->voronoi_wall_decay       == rhs.voronoi_wall_decay       &&
+                this->voronoi_smoothing_sigma == rhs.voronoi_smoothing_sigma &&
                 this->smooth_factor           == rhs.smooth_factor           &&
                 this->fill_order              == rhs.fill_order;
 	}
 };
 
-// Point providers and physical support are configured before geometry and routing.
+// Distribution setup belongs outside wall geometry and routing. Full object
+// outlines give every surface and layer the same reproducible spatial field.
 static void configure_voronoi_cloud(Fill &fill, const SurfaceFillParams &params, const Layer &layer, VoronoiInfillCache *cache = nullptr)
 {
+    const PrintObject &object = *layer.object();
     if (params.pattern != ipVoronoi) return;
-    const Vec2d center = layer.object()->bounding_box().center().cast<double>() * SCALING_FACTOR;
-    const double angle = params.voronoi_cloud_angle;
-    std::shared_ptr<const Voronoi::PointCloudProvider> provider;
-    if (cache) {
-        auto &cached = cache->rotated_clouds[{angle, center.x(), center.y()}];
-        if (!cached) cached = std::make_shared<Voronoi::PoissonPointCloud>(angle, center);
-        provider = cached;
-    } else {
-        provider = std::make_shared<Voronoi::PoissonPointCloud>(angle, center);
-    }
     auto &voronoi = static_cast<FillVoronoi &>(fill);
-    voronoi.set_point_cloud(provider, cache);
+    voronoi.set_point_cloud(object.voronoi_point_cloud(params.voronoi_wall_decay, params.voronoi_smoothing_sigma, params.voronoi_cloud_angle), cache);
     if (layer.lower_layer) {
         // Perimeters are complete before parallel infill generation; lower-layer
         // infill is not. Use bead footprints rather than solid slice outlines.
@@ -419,6 +417,7 @@ static void configure_voronoi_cloud(Fill &fill, const SurfaceFillParams &params,
         voronoi.set_floor_support(union_ex(support));
     }
 }
+
 
 struct SurfaceFill {
 	SurfaceFill(const SurfaceFillParams& params) : region_id(size_t(-1)), surface(stCount, ExPolygon()), params(params) {}
@@ -1034,6 +1033,8 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 // Orca: Likewise separated_infills only where it can move the pattern.
                 params.separated_infills = region_config.separated_infills && is_separable_infill_pattern(params.pattern) &&
                                            params.extrusion_role != erTopSolidInfill && params.extrusion_role != erBottomSurface;
+                params.voronoi_wall_decay = params.pattern == ipVoronoi ? region_config.voronoi_wall_decay.value : 0.;
+                params.voronoi_smoothing_sigma = params.pattern == ipVoronoi ? region_config.voronoi_smoothing_sigma.value : 0.;
 
                 if (params.extrusion_role == erInternalInfill) {
                     params.angle = calculate_infill_rotation_angle(layer.object(), layer.id(), region_config.infill_direction.value,
