@@ -7,6 +7,7 @@
 #include "../Line.hpp"
 #include <limits>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -29,6 +30,23 @@ void FillVoronoi::_fill_surface_single(const FillParams &params, unsigned int,
     Voronoi::Layer layer = m_infill->fill_geometry(bounding_box, expolygon, spacing, params.density, z,
                                              params.flow.width(), height, reference_height, params.flow.spacing(), params.multiline);
     ExPolygons excluded;
+    if (m_hull_threshold > 0.) {
+        const std::array<double, 4> key {z, height, params.flow.width(), m_hull_threshold};
+        if (key != m_hull_key || bounding_box.min != m_hull_bounds.min || bounding_box.max != m_hull_bounds.max) {
+            m_hull = Voronoi::hull_section(*m_provider, bounding_box, z - 0.5 * height, height,
+                                         params.flow.width(), m_hull_threshold);
+            m_hull_key = key;
+            m_hull_bounds = bounding_box;
+        }
+        excluded = m_hull.cavity;
+        append(excluded, m_hull.skin);
+        layer.walls = diff_pl(layer.walls, excluded);
+        std::vector<Voronoi::Band> bands;
+        for (const auto &band : layer.bands)
+            for (auto &polygon : diff_ex(ExPolygons{band.polygon}, excluded))
+                bands.push_back({std::move(polygon), band.supported_side, band.row_origin});
+        layer.bands = std::move(bands);
+    }
     layer.walls = m_infill->route_walls(std::move(layer.walls), layer_id);
     multiline_fill(layer.walls, params, float(params.flow.spacing()));
     layer.walls = intersection_pl(std::move(layer.walls), expolygon);
@@ -42,8 +60,36 @@ void FillVoronoi::_fill_surface_single(const FillParams &params, unsigned int,
     }
     const Point start = polylines_out.empty() ? expolygon.contour.first_point() : polylines_out.back().last_point();
     auto groups = fill_paths(std::move(layer), params);
+    if (m_hull_threshold > 0. && !m_hull.skin.empty())
+        append(groups, fill_hull(m_hull, expolygon, params));
     for (Voronoi::PathGroup &group : Voronoi::order_groups(std::move(groups), start))
         append(polylines_out, std::move(group.paths));
+}
+
+std::vector<Voronoi::PathGroup> FillVoronoi::fill_hull(const Voronoi::HullSection &hull, const ExPolygon &region, const FillParams &params) const
+{
+    const double width = params.flow.width();
+    const auto centers = offset_ex(hull.cavity, float(scale_(0.5 * width)));
+    std::vector<Voronoi::PathGroup> groups;
+    for (const auto &polygon : to_polygons(centers)) {
+        Polyline loop(polygon.points);
+        loop.points.push_back(loop.points.front());
+        for (auto &path : intersection_pl(Polylines{std::move(loop)}, region))
+            groups.push_back({Polylines{std::move(path)}, true});
+    }
+    // The contour supplies one continuous bead for the vertical wall. Orca's
+    // solid infill fills the additional swept area on slopes and end caps.
+    const auto covered = diff_ex(offset_ex(centers, float(scale_(0.5 * width))),
+                                 offset_ex(centers, -float(scale_(0.5 * width))));
+    const auto extra = intersection_ex(diff_ex(hull.skin, covered), ExPolygons{region});
+    FillAlignedRectilinear filler;
+    filler.set_bounding_box(bounding_box);
+    filler.angle = layer_id % 2 == 0 ? 0.f : float(M_PI / 2.);
+    for (const auto &polygon : extra) {
+        auto paths = solid_fill(filler, polygon, params);
+        if (!paths.empty()) groups.push_back({std::move(paths), false});
+    }
+    return groups;
 }
 
 std::vector<Voronoi::PathGroup> FillVoronoi::fill_paths(Voronoi::Layer layer, const FillParams &params) const

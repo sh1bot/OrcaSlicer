@@ -18,6 +18,10 @@ public:
     virtual ~PointCloudProvider() = default;
     virtual double spacing(double extrusion_spacing, double nominal_height, double density) const = 0;
     virtual std::vector<Vec3d> points_in(const BoundingBoxf3 &box, double spacing) const = 0;
+    // Relative density for hull extraction, independent of site generation.
+    // Uniform fields never fall below a threshold at or below the setting.
+    virtual std::vector<double> relative_density(const std::vector<Vec3d> &points) const
+        { return std::vector<double>(points.size(), 1.); }
     // A finite field can declare its complete extent, including an undefined
     // box for an empty field. An unbounded field must eventually supply points.
     virtual std::optional<BoundingBoxf3> extent() const { return std::nullopt; }
@@ -51,6 +55,7 @@ public:
     explicit WallDistancePointCloud(WallDistanceSamples distance, double decay = 6.,
                                     double angle = 0., const Vec2d &center = Vec2d::Zero());
     std::vector<Vec3d> points_in(const BoundingBoxf3 &box, double spacing) const override;
+    std::vector<double> relative_density(const std::vector<Vec3d> &points) const override;
     // Relative local infill density, before cubing to obtain site intensity.
     static double density_ratio(double distance, double sampled_mean, double decay = 6.);
 private:
