@@ -847,10 +847,11 @@ void PrintObject::infill()
         for (size_t region_id = 0; region_id < num_printing_regions(); ++region_id) {
             const PrintRegionConfig &config = printing_region(region_id).config();
             if (config.sparse_infill_density > 0 && config.sparse_infill_pattern == ipVoronoi) {
-                const double site_spacing = config.voronoi_relaxation_iterations > 0 ?
+                const bool shells = config.voronoi_cloud_method == VoronoiCloudMethod::DensityShells;
+                const double site_spacing = shells || config.voronoi_relaxation_iterations > 0 ?
                     Voronoi::PoissonPointCloud().spacing(printing_region(region_id).flow(*this, frInfill, m_config.layer_height.value).spacing(),
                                                        m_config.layer_height.value, 0.01 * float(config.sparse_infill_density.value)) : 0.;
-                voronoi_point_cloud(config.voronoi_wall_decay.value, config.voronoi_smoothing_sigma.value, site_spacing, config.voronoi_relaxation_iterations.value);
+                voronoi_point_cloud(config.voronoi_wall_decay.value, config.voronoi_smoothing_sigma.value, site_spacing, shells, config.voronoi_relaxation_iterations.value);
             }
         }
         size_t completed_layers = 0;
@@ -1275,7 +1276,7 @@ FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
     return has_lightning_infill ? FillLightning::build_generator(std::as_const(*this), [this]() -> void { this->throw_if_canceled(); }) : FillLightning::GeneratorPtr();
 }
 
-std::shared_ptr<const Voronoi::PointCloudProvider> PrintObject::voronoi_point_cloud(double decay, double sigma, double site_spacing, int relaxation_iterations) const
+std::shared_ptr<const Voronoi::PointCloudProvider> PrintObject::voronoi_point_cloud(double decay, double sigma, double site_spacing, bool density_shells, int relaxation_iterations, double angle) const
 {
     const int percent = is_step_done(posPrepareInfill) ? 35 : 25;
     auto last_report = std::chrono::steady_clock::now();
@@ -1296,6 +1297,7 @@ std::shared_ptr<const Voronoi::PointCloudProvider> PrintObject::voronoi_point_cl
             case Voronoi::WallDistanceStage::Encoding: message = L("Encoding Voronoi wall distances"); break;
             case Voronoi::WallDistanceStage::SmoothXY: message = L("Smoothing Voronoi wall distances (XY)"); break;
             case Voronoi::WallDistanceStage::SmoothZ: message = L("Smoothing Voronoi wall distances (Z)"); break;
+            case Voronoi::WallDistanceStage::Shells: message = L("Preparing Voronoi density shells"); break;
             case Voronoi::WallDistanceStage::Relaxation: message = L("Relaxing Voronoi control points"); break;
             case Voronoi::WallDistanceStage::Complete: message = L("Finalizing Voronoi wall distances"); break;
             default: return;
@@ -1303,7 +1305,7 @@ std::shared_ptr<const Voronoi::PointCloudProvider> PrintObject::voronoi_point_cl
             m_print->set_status(percent, message + " (" + std::to_string(int(100. * fraction)) + "%)");
             last_report = now;
             last_stage = stage;
-        }, site_spacing, relaxation_iterations);
+        }, site_spacing, density_shells, relaxation_iterations, angle);
 }
 
 void PrintObject::clear_layers()
@@ -1625,7 +1627,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "lateral_lattice_angle_2"
             || opt_key == "infill_overhang_angle") {
             steps.emplace_back(posInfill);
-        } else if (opt_key == "voronoi_relaxation_iterations" || opt_key == "voronoi_wall_decay" || opt_key == "voronoi_smoothing_sigma" || opt_key == "voronoi_hull_threshold" || opt_key == "sparse_infill_pattern"
+        } else if (opt_key == "voronoi_relaxation_iterations" || opt_key == "voronoi_cloud_method" || opt_key == "voronoi_wall_decay" || opt_key == "voronoi_smoothing_sigma" || opt_key == "voronoi_hull_threshold" || opt_key == "sparse_infill_pattern"
                    // Orca: Body centering now also determines bridge anchors during preparation.
                    // Invalidating preparation also invalidates infill, including top/bottom surfaces.
                    || opt_key == "center_of_surface_pattern"

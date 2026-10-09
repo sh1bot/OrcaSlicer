@@ -382,9 +382,10 @@ TEST_CASE("Independent Voronoi hull loops can route through an intervening wall"
     REQUIRE(ordered[2].paths.front().first_point() == next);
 }
 
-TEST_CASE("Voronoi extrudes prepared point clouds with native flow and clipping", "[FillVoronoi][Relaxation]")
+TEST_CASE("Voronoi extrudes prepared point clouds with native flow and clipping", "[FillVoronoi][DensityShells]")
 {
     const int iterations = GENERATE(0, 3);
+    const bool shells = GENERATE(false, true);
     const ExPolygon region {Point::new_scale(0., 0.), Point::new_scale(20., 0.),
                             Point::new_scale(20., 20.), Point::new_scale(0., 20.)};
     const ExPolygons outlines {region};
@@ -395,7 +396,7 @@ TEST_CASE("Voronoi extrudes prepared point clouds with native flow and clipping"
     params.using_internal_flow = true;
     const double spacing = Voronoi::PoissonPointCloud().spacing(params.flow.spacing(), params.flow.height(), params.density);
     Voronoi::WallDistanceCloudCache cache;
-    const auto cloud = cache.get([&] { return std::vector<Voronoi::WallSlice>{{0., 20., &outlines}}; }, 6., 0., {}, spacing, iterations);
+    const auto cloud = cache.get([&] { return std::vector<Voronoi::WallSlice>{{0., 20., &outlines}}; }, 6., 0., {}, spacing, shells, iterations);
     FillVoronoi filler;
     filler.set_point_cloud(cloud);
     filler.set_bounding_box(region.contour.bounding_box());

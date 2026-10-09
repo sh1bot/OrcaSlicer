@@ -79,9 +79,12 @@ TEST_CASE("Print presets initialize and retain Voronoi decay and smoothing", "[P
     config.apply_only(FullPrintConfig::defaults(), Preset::print_options());
     REQUIRE_THAT(config.opt_float("voronoi_wall_decay"), Catch::Matchers::WithinAbs(6., EPSILON));
     REQUIRE_THAT(config.opt_float("voronoi_smoothing_sigma"), Catch::Matchers::WithinAbs(8., EPSILON));
+    REQUIRE(config.opt_enum<VoronoiCloudMethod>("voronoi_cloud_method") == VoronoiCloudMethod::Random);
     REQUIRE(config.opt_int("voronoi_relaxation_iterations") == 0);
     config.set_deserialize_strict("voronoi_relaxation_iterations", "5");
     REQUIRE(config.opt_int("voronoi_relaxation_iterations") == 5);
+    config.set_deserialize_strict("voronoi_cloud_method", "density_shells");
+    REQUIRE(config.opt_enum<VoronoiCloudMethod>("voronoi_cloud_method") == VoronoiCloudMethod::DensityShells);
     REQUIRE(config.has("voronoi_hull_threshold"));
     REQUIRE_THAT(config.option("voronoi_hull_threshold")->getFloat(), Catch::Matchers::WithinAbs(0., EPSILON));
     config.set_deserialize_strict("voronoi_hull_threshold", "20%");

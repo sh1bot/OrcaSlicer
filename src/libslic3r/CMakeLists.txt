@@ -168,6 +168,7 @@ set(lisbslic3r_sources
     Fill/VoronoiHull.hpp
     Fill/VoronoiPointCloud.cpp
     Fill/VoronoiPointCloud.hpp
+    Fill/VoronoiDensityShells.hpp
     Fill/VoronoiRelaxation.hpp
     Fill/VoronoiWallDistance.cpp
     Fill/VoronoiWallDistance.hpp
@@ -606,6 +607,7 @@ unset(CMAKE_POLICY_DEFAULT_CMP0167)
 cmake_policy(POP)
 
 add_library(libslic3r_cgal STATIC
+    Fill/VoronoiDensityShells.cpp
     Fill/VoronoiRelaxation.cpp
     Fill/VoronoiInfillCgal.cpp
     CutSurface.hpp CutSurface.cpp

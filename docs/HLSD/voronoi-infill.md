@@ -65,8 +65,8 @@ Infill reports completed layers with throttled UI updates and cancellation.
 ## Wall proximity and smoothing
 
 Wall-proximity decay defaults to 6 mm; zero gives a uniform base. Gaussian sigma
-defaults to 8 mm; zero disables smoothing. With both zero, the original Poisson
-provider is used without a distance table.
+defaults to 8 mm; zero disables smoothing. With both zero and the Random method,
+the original Poisson provider is used without a distance table.
 
 Along flat walls, local density stays at the selected setting within 2 mm,
 then decays exponentially to a 1% tail after five decay lengths. The magnitude
@@ -94,6 +94,39 @@ values. Temporary filter borders extrapolate outward slopes; zero sigma reuses
 the original field. Tables are shared by smoothing width, and point providers
 retain their own decay setting. Reslicing clears the per-object cache.
 Construction and smoothing report phase progress and check cancellation.
+
+## Density-shell point cloud
+
+The point-cloud selector retains Random as its default. Density shells prepares
+3D surfaces starting on the model boundary. Neighbouring surfaces follow a
+weighted distance field whose gradient magnitude is the local density ratio.
+Equal contour intervals follow the same spacing function as points along each
+surface, including wall-proximity decay and corner boosts. Fast marching
+accumulates this field from the boundary; the initial grid-width band integrates
+density using the local corner correction. With decay and smoothing disabled,
+surfaces follow ordinary wall-distance contours.
+Contours are extracted from an FCC sampling lattice, with close-packed planes
+parallel to the bed. Sparse infill direction rotates this lattice around Z;
+model alignment adds the object's XY rotation. This orientation stays fixed
+across layers; per-layer
+rotation templates do not rotate the 3D constellation. CGAL isotropic remeshing
+supplies approximately triangular point arrangements; alternate extraction
+grids encourage staggering. Surfaces can split, merge or disappear without
+requiring point correspondence.
+
+A coverage pass adds sparse interior sites where the surfaces leave gaps larger
+than local point spacing, including narrow necks that vanish between shell
+levels. Small deterministic offsets keep these points off the sampling lattice.
+Boundary sites count towards coverage; exterior guard sites do not.
+
+The exterior surface uses boundary density to supply neighbours beyond the
+model boundary. The finite, height-sorted cloud is cached per spacing, density
+settings and orientation; meshes are discarded before layer workers query it.
+Extraction and coverage normally use 1–2 mm lattice spacing and coarsen to at most
+two million nodes.
+Preparation reports progress and checks cancellation. Thin details below that
+resolution may be missed. Density remains approximate, and shells do not
+constrain face slopes or guarantee printable vaults.
 
 ## Optional inner hull
 

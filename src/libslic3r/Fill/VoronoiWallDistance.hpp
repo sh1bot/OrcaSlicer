@@ -22,7 +22,7 @@ struct WallSlice {
     const ExPolygons *contours;
 };
 
-enum class WallDistanceStage { Distance, Encoding, SmoothXY, SmoothZ, Relaxation, Complete };
+enum class WallDistanceStage { Distance, Encoding, SmoothXY, SmoothZ, Shells, Relaxation, Complete };
 // Called synchronously during construction, including within long phases.
 // The callback may throw to cancel construction; no partial table is cached.
 using WallDistanceProgress = std::function<void(WallDistanceStage, double)>;
@@ -48,12 +48,12 @@ public:
     std::shared_ptr<const PointCloudProvider> get(const std::function<std::vector<WallSlice>()> &load_slices,
                                                   double decay = 6., double sigma = 8.,
                                                   const WallDistanceProgress &progress = {}, double site_spacing = 0.,
-                                                  int relaxation_iterations = 0);
+                                                  bool density_shells = false, int relaxation_iterations = 0, double angle = 0.);
     void clear();
 private:
     std::mutex m_mutex;
     std::map<double, std::shared_ptr<const CubicWallDistance>> m_tables;
-    std::map<std::tuple<double, double, double, int>, std::shared_ptr<const PointCloudProvider>> m_providers;
+    std::map<std::tuple<double, double, double, bool, int, double>, std::shared_ptr<const PointCloudProvider>> m_providers;
 };
 
 } // namespace Slic3r::Voronoi

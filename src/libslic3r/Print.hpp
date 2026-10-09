@@ -427,7 +427,7 @@ public:
     size_t 			total_layer_count() const { return this->layer_count() + this->support_layer_count(); }
     size_t 			layer_count() const { return m_layers.size(); }
     void 			clear_layers();
-    std::shared_ptr<const Voronoi::PointCloudProvider> voronoi_point_cloud(double decay, double sigma, double site_spacing = 0., int relaxation_iterations = 0) const;
+    std::shared_ptr<const Voronoi::PointCloudProvider> voronoi_point_cloud(double decay, double sigma, double site_spacing = 0., bool density_shells = false, int relaxation_iterations = 0, double angle = 0.) const;
     const Layer* 	get_layer(int idx) const { return m_layers[idx]; }
     Layer* 			get_layer(int idx) 		 { return m_layers[idx]; }
     // Get a layer exactly at print_z.

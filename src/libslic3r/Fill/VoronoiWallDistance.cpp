@@ -1,4 +1,5 @@
 #include "VoronoiWallDistance.hpp"
+#include "VoronoiDensityShells.hpp"
 #include "VoronoiRelaxation.hpp"
 #include <functional>
 #include <memory>
@@ -381,14 +382,17 @@ std::vector<double> CubicWallDistance::sample(const std::vector<Vec3d> &points) 
 
 std::shared_ptr<const PointCloudProvider> WallDistanceCloudCache::get(const std::function<std::vector<WallSlice>()> &load_slices, double decay, double sigma,
                                                                    const WallDistanceProgress &progress, double site_spacing,
-                                                                   int relaxation_iterations)
+                                                                   bool density_shells, int relaxation_iterations, double angle)
 {
     if (!std::isfinite(site_spacing) || site_spacing < 0. || relaxation_iterations < 0 ||
-        (relaxation_iterations > 0 && site_spacing == 0.))
+        ((density_shells || relaxation_iterations > 0) && site_spacing == 0.))
         throw std::invalid_argument("Invalid Voronoi point preparation settings");
     if (!std::isfinite(decay) || decay < 0. || !std::isfinite(sigma) || sigma < 0.)
         throw std::invalid_argument("Invalid Voronoi distance settings");
-    if (relaxation_iterations == 0) site_spacing = 0.;
+    if (!std::isfinite(angle)) throw std::invalid_argument("Invalid Voronoi cloud angle");
+    angle = density_shells ? std::fmod(angle, 2. * std::acos(-1.)) : 0.;
+    if (angle < 0.) angle += 2. * std::acos(-1.);
+    if (!density_shells && relaxation_iterations == 0) site_spacing = 0.;
     std::lock_guard<std::mutex> lock(m_mutex);
     const auto bounds = [&] {
         BoundingBoxf3 box;
@@ -402,19 +406,23 @@ std::shared_ptr<const PointCloudProvider> WallDistanceCloudCache::get(const std:
         return box;
     };
     // Reuse the point provider when only the relaxation count changes.
-    auto &provider = m_providers[{decay, sigma, 0., 0}];
+    auto &provider = m_providers[{decay, sigma, density_shells ? site_spacing : 0., density_shells, 0, angle}];
     if (!provider) {
-        if (decay == 0. && sigma == 0.)
+        if (!density_shells && decay == 0. && sigma == 0.)
             provider = std::make_shared<PoissonPointCloud>();
         else {
             auto &table = m_tables[sigma];
             if (!table) table = std::make_shared<CubicWallDistance>(load_slices(), sigma, progress);
             const WallDistanceSamples sample = [table](const auto &points) { return table->sample_fields(points); };
-            provider = std::make_shared<WallDistancePointCloud>(sample, decay);
+            if (density_shells)
+                provider = std::make_shared<DensityShellPointCloud>(sample, bounds(), site_spacing, decay,
+                    [&](double fraction) { report(progress, WallDistanceStage::Shells, fraction); }, angle);
+            else
+                provider = std::make_shared<WallDistancePointCloud>(sample, decay);
         }
     }
     if (relaxation_iterations == 0) return provider;
-    auto &relaxed = m_providers[{decay, sigma, site_spacing, relaxation_iterations}];
+    auto &relaxed = m_providers[{decay, sigma, site_spacing, density_shells, relaxation_iterations, angle}];
     if (!relaxed)
         relaxed = std::make_shared<RelaxedPointCloud>(provider, bounds(), site_spacing, relaxation_iterations,
             [&](double fraction) { report(progress, WallDistanceStage::Relaxation, fraction); });

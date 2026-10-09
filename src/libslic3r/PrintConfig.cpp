@@ -240,6 +240,12 @@ static t_config_enum_values s_keys_map_PowerLossRecoveryMode {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(PowerLossRecoveryMode)
 
+static t_config_enum_values s_keys_map_VoronoiCloudMethod {
+    {"random", int(VoronoiCloudMethod::Random)},
+    {"density_shells", int(VoronoiCloudMethod::DensityShells)}
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(VoronoiCloudMethod)
+
 static t_config_enum_values s_keys_map_CenterOfSurfacePattern{
     {"each_surface", int(CenterOfSurfacePattern::Each_Surface)},
     {"each_model", int(CenterOfSurfacePattern::Each_Model)},
@@ -3573,6 +3579,16 @@ void PrintConfigDef::init_fff_params()
     // Retained only to migrate projects written by the original selector.
     def = this->add("voronoi_point_distribution", coString);
     def->set_default_value(new ConfigOptionString());
+
+    def = this->add("voronoi_cloud_method", coEnum);
+    def->label = L("Voronoi point cloud");
+    def->category = L("Strength");
+    def->tooltip = L("Random places independent points according to local density. Density shells places regularly spaced points on successive three-dimensional wall-distance surfaces. Point spacing follows local density, including corner boosts. Shell separation increases farther from walls. Neither method guarantees self-supporting infill.");
+    def->enum_keys_map = &ConfigOptionEnum<VoronoiCloudMethod>::get_enum_values();
+    def->enum_values = {"random", "density_shells"};
+    def->enum_labels = {L("Random"), L("Density shells")};
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<VoronoiCloudMethod>(VoronoiCloudMethod::Random));
 
     def = this->add("voronoi_relaxation_iterations", coInt);
     def->label = L("Voronoi relaxation iterations");

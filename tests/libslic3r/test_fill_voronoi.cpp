@@ -3,6 +3,7 @@
 #include "libslic3r/Fill/VoronoiInfill.hpp"
 #include "libslic3r/Fill/VoronoiRouting.hpp"
 #include "libslic3r/Fill/VoronoiWallDistance.hpp"
+#include "libslic3r/Fill/VoronoiDensityShells.hpp"
 #include "libslic3r/Fill/VoronoiRelaxation.hpp"
 #include "libslic3r/Fill/VoronoiHull.hpp"
 #include "libslic3r/ClipperUtils.hpp"
@@ -17,6 +18,7 @@
 #include <set>
 #include <vector>
 #include <stdexcept>
+#include <utility>
 
 using namespace Slic3r;
 
@@ -1309,6 +1311,316 @@ TEST_CASE("Canceled Voronoi smoothing leaves the cache usable", "[FillVoronoi]")
         [](auto, double) { throw std::runtime_error("cached tables must not rebuild"); }) == provider);
 }
 
+TEST_CASE("Density shells sample an FCC lattice with triangular horizontal planes", "[FillVoronoi][DensityShells]")
+{
+    const double angle = GENERATE(0., 0.37);
+    std::vector<Vec3d> grid;
+    const auto sample = [&](const std::vector<Vec3d> &points) {
+        grid.insert(grid.end(), points.begin(), points.end());
+        std::vector<Voronoi::WallDistanceSample> fields;
+        for (const auto &p : points) { const double d = p.norm() - 3.; fields.push_back({d, d}); }
+        return fields;
+    };
+    // Stop after field sampling, before remeshing changes the lattice sites.
+    REQUIRE_THROWS_AS(Voronoi::DensityShellPointCloud(sample,
+        BoundingBoxf3(Vec3d::Constant(-3.), Vec3d::Constant(3.)), 2., 0.,
+        [](double progress) { if (progress >= 0.1) throw std::runtime_error("Sampled"); }, angle), std::runtime_error);
+    REQUIRE_FALSE(grid.empty());
+    const Vec3d centre = *std::min_element(grid.begin(), grid.end(),
+        [](const Vec3d &a, const Vec3d &b) { return a.squaredNorm() < b.squaredNorm(); });
+    std::vector<Vec3d> neighbours;
+    for (const auto &p : grid)
+        if ((p - centre).squaredNorm() > 1e-10) neighbours.push_back(p - centre);
+    std::sort(neighbours.begin(), neighbours.end(),
+        [](const Vec3d &a, const Vec3d &b) { return a.squaredNorm() < b.squaredNorm(); });
+    REQUIRE(neighbours.size() > 12);
+    const double spacing = neighbours.front().norm();
+    size_t horizontal = 0;
+    for (size_t i = 0; i < 12; ++i) {
+        REQUIRE_THAT(neighbours[i].norm(), Catch::Matchers::WithinAbs(spacing, 1e-8));
+        if (std::abs(neighbours[i].z()) < 1e-8) ++horizontal;
+    }
+    REQUIRE(horizontal == 6);
+    REQUIRE(neighbours[12].norm() > 1.1 * spacing);
+}
+
+TEST_CASE("Density shells prepare reproducible finite three-dimensional sites", "[FillVoronoi][DensityShells]")
+{
+    const auto sample = [](const std::vector<Vec3d> &points) {
+        std::vector<Voronoi::WallDistanceSample> result;
+        for (const auto &p : points) { const double d = p.norm() - 12.; result.push_back({d, d}); }
+        return result;
+    };
+    const BoundingBoxf3 bounds(Vec3d::Constant(-12.), Vec3d::Constant(12.));
+    Voronoi::DensityShellPointCloud cloud(sample, bounds, 4., 0.);
+    const auto extent = *cloud.extent();
+    const BoundingBoxf3 all(extent.min - Vec3d::Ones(), extent.max + Vec3d::Ones());
+    const auto sites = cloud.points_in(all, 4.);
+    REQUIRE(sites.size() > 100);
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) { return p.norm() > 12.; }));
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) { return p.norm() < 5.; }));
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) { return p.z() < -8.; }));
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) { return p.z() > 8.; }));
+    auto partitioned = cloud.points_in(BoundingBoxf3(all.min, Vec3d(all.max.x(), all.max.y(), 0.)), 4.);
+    append(partitioned, cloud.points_in(BoundingBoxf3(Vec3d(all.min.x(), all.min.y(), 0.), all.max), 4.));
+    REQUIRE(partitioned == sites);
+    REQUIRE(cloud.points_in(all, 4.) == sites);
+    REQUIRE(cloud.points_in(BoundingBoxf3(Vec3d::Constant(100.), Vec3d::Constant(101.)), 4.).empty());
+    for (size_t i = 1; i < sites.size(); ++i) REQUIRE(sites[i] != sites[i - 1]);
+    // The points follow 3D distance surfaces, not a stack of planar contours.
+    const double a = std::cbrt(2. / std::sqrt(3.)) * 4.;
+    for (const auto &p : sites) {
+        const double level = 12. - p.norm();
+        double error = std::abs(level + a);
+        for (double shell = 0.; shell < 12.; shell += a) error = std::min(error, std::abs(level - shell));
+        // Curved surfaces are approximated by the 2 mm extraction grid.
+        REQUIRE_THAT(error, Catch::Matchers::WithinAbs(0., 1.));
+    }
+}
+
+TEST_CASE("Density shells include the model surface with neighbours one nominal spacing away", "[FillVoronoi][DensityShells]")
+{
+    const auto sample = [](const std::vector<Vec3d> &points) {
+        std::vector<Voronoi::WallDistanceSample> fields;
+        for (const auto &p : points) { const double d = p.cwiseAbs().maxCoeff() - 12.; fields.push_back({d, d}); }
+        return fields;
+    };
+    const Voronoi::DensityShellPointCloud cloud(sample, BoundingBoxf3(Vec3d::Constant(-12.), Vec3d::Constant(12.)), 3., 0.);
+    const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-24.), Vec3d::Constant(24.)), 3.);
+    const double a = std::cbrt(2. / std::sqrt(3.)) * 3.;
+    for (double depth : {-a, 0., a})
+        for (int axis = 0; axis < 3; ++axis)
+            for (double side : {-1., 1.})
+                REQUIRE(std::any_of(sites.begin(), sites.end(), [depth, axis, side](const Vec3d &p) {
+                    return std::abs(p[axis] - side * (12. - depth)) < 1e-3 &&
+                           std::abs(p[(axis + 1) % 3]) < 6. && std::abs(p[(axis + 2) % 3]) < 6.;
+                }));
+    std::vector<Vec2d> surface;
+    for (const auto &p : sites)
+        if (std::abs(p.x() - 12.) < 1e-3 && std::abs(p.y()) < 10. && std::abs(p.z()) < 10.)
+            surface.push_back(p.tail<2>());
+    double fourfold = 0., sixfold = 0.;
+    size_t measured = 0;
+    for (const auto &p : surface) {
+        if (p.cwiseAbs().maxCoeff() > 4.) continue;
+        std::vector<std::pair<double, Vec2d>> neighbours;
+        for (const auto &q : surface)
+            if ((q - p).squaredNorm() > 1e-6) neighbours.emplace_back((q - p).squaredNorm(), q - p);
+        REQUIRE(neighbours.size() >= 6);
+        std::sort(neighbours.begin(), neighbours.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+        Vec2d four = Vec2d::Zero(), six = Vec2d::Zero();
+        for (size_t i = 0; i < 6; ++i) {
+            const double angle = std::atan2(neighbours[i].second.y(), neighbours[i].second.x());
+            four += Vec2d(std::cos(4. * angle), std::sin(4. * angle));
+            six += Vec2d(std::cos(6. * angle), std::sin(6. * angle));
+        }
+        fourfold += four.norm();
+        sixfold += six.norm();
+        ++measured;
+    }
+    REQUIRE(measured > 0);
+    REQUIRE(sixfold > fourfold);
+}
+
+TEST_CASE("Density shells thin the interior without thinning near-wall surfaces", "[FillVoronoi][DensityShells]")
+{
+    const auto sample = [](const std::vector<Vec3d> &points) {
+        std::vector<Voronoi::WallDistanceSample> result;
+        for (const auto &p : points) { const double d = p.norm() - 16.; result.push_back({d, d}); }
+        return result;
+    };
+    const BoundingBoxf3 bounds(Vec3d::Constant(-16.), Vec3d::Constant(16.));
+    const Voronoi::DensityShellPointCloud uniform(sample, bounds, 4., 0.), thinning(sample, bounds, 4., 6.);
+    const BoundingBoxf3 all(Vec3d::Constant(-24.), Vec3d::Constant(24.));
+    const auto u = uniform.points_in(all, 4.), t = thinning.points_in(all, 4.);
+    const auto inner = [](const Vec3d &p) { return p.norm() < 10.; };
+    const auto outer = [](const Vec3d &p) { return p.norm() > 16.; };
+    REQUIRE(std::count_if(t.begin(), t.end(), inner) < std::count_if(u.begin(), u.end(), inner));
+    REQUIRE_THAT(double(std::count_if(t.begin(), t.end(), outer)),
+                 Catch::Matchers::WithinRel(double(std::count_if(u.begin(), u.end(), outer)), 0.05));
+    REQUIRE(thinning.relative_density({Vec3d::Zero()})[0] < uniform.relative_density({Vec3d::Zero()})[0]);
+}
+
+TEST_CASE("Density shells preserve components when inward surfaces split", "[FillVoronoi][DensityShells]")
+{
+    const auto sample = [](const std::vector<Vec3d> &points) {
+        std::vector<Voronoi::WallDistanceSample> result;
+        for (const auto &p : points) {
+            const double d = std::min((p - Vec3d(-5., 0., 0.)).norm(), (p - Vec3d(5., 0., 0.)).norm()) - 6.;
+            result.push_back({d, d});
+        }
+        return result;
+    };
+    const Voronoi::DensityShellPointCloud cloud(sample, BoundingBoxf3(Vec3d(-11., -6., -6.), Vec3d(11., 6., 6.)), 3., 0.);
+    const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-20.), Vec3d::Constant(20.)), 3.);
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) { return (p - Vec3d(-5., 0., 0.)).norm() < 5.; }));
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) { return (p - Vec3d(5., 0., 0.)).norm() < 5.; }));
+}
+
+TEST_CASE("Density shells match point spacing on both sides of a corner-boosted boundary", "[FillVoronoi][DensityShells]")
+{
+    const double correction = GENERATE(-2., 2.);
+    const auto sample = [](double correction) {
+        return [correction](const std::vector<Vec3d> &points) {
+            std::vector<Voronoi::WallDistanceSample> fields;
+            for (const auto &p : points) { const double d = p.norm() - 16.; fields.push_back({d, d + correction}); }
+            return fields;
+        };
+    };
+    const BoundingBoxf3 bounds(Vec3d::Constant(-16.), Vec3d::Constant(16.));
+    const Voronoi::DensityShellPointCloud plain(sample(0.), bounds, 3., 0.), boosted(sample(correction), bounds, 3., 0.);
+    const BoundingBoxf3 all(Vec3d::Constant(-24.), Vec3d::Constant(24.));
+    const auto sites = boosted.points_in(all, 3.);
+    REQUIRE(sites.size() > plain.points_in(all, 3.).size());
+    REQUIRE(boosted.relative_density({Vec3d(12., 0., 0.)})[0] > plain.relative_density({Vec3d(12., 0., 0.)})[0]);
+    const double a = std::cbrt(2. / std::sqrt(3.)) * 3.;
+    const double ratio = Voronoi::WallDistancePointCloud::density_ratio(0., correction, 0.);
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [a, ratio](const Vec3d &p) {
+        return std::abs(16. - p.norm() - a / ratio) < 0.3;
+    }));
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) {
+        return std::abs(16. - p.norm()) < 0.1;
+    }));
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [a, ratio](const Vec3d &p) {
+        return std::abs(16. - p.norm() + a / ratio) < 0.1;
+    }));
+    for (const auto &p : sites) {
+        const double depth = 16. - p.norm();
+        const double phase = depth * ratio;
+        double error = std::abs(phase + a);
+        error = std::min(error, std::abs(depth));
+        for (double level = a; level < 16. * ratio; level += a) error = std::min(error, std::abs(phase - level));
+        REQUIRE_THAT(error, Catch::Matchers::WithinAbs(0., 0.8));
+    }
+}
+
+TEST_CASE("Density shells integrate changing point spacing between flat-wall contours", "[FillVoronoi][DensityShells]")
+{
+    const double correction = GENERATE(0., 2.);
+    const double angle = GENERATE(0., std::acos(-1.) / 4.);
+    const double decay = 6., spacing = 3., radius = 24.;
+    const auto sample = [correction, radius](const std::vector<Vec3d> &points) {
+        std::vector<Voronoi::WallDistanceSample> fields;
+        for (const auto &p : points) {
+            const double d = p.cwiseAbs().maxCoeff() - radius;
+            fields.push_back({d, d + correction});
+        }
+        return fields;
+    };
+    const Voronoi::DensityShellPointCloud cloud(sample,
+        BoundingBoxf3(Vec3d::Constant(-radius), Vec3d::Constant(radius)), spacing, decay, {}, angle);
+    const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-40.), Vec3d::Constant(40.)), spacing);
+    const double a = std::cbrt(2. / std::sqrt(3.)) * spacing;
+    // Independently integrate the requested spacing over physical depth. Each
+    // successive contour must advance by one nominal spacing in this integral.
+    const auto phase = [&](double depth) {
+        double integral = 0.;
+        constexpr double step = 0.005;
+        for (double d = 0.; d < depth; d += step) {
+            const double length = std::min(step, depth - d), middle = d + length / 2.;
+            integral += length * Voronoi::WallDistancePointCloud::density_ratio(-middle, -middle + correction, decay);
+        }
+        return integral;
+    };
+    for (int shell : {1, 2}) {
+        double low = 0., high = radius;
+        for (int iteration = 0; iteration < 20; ++iteration) {
+            const double middle = (low + high) / 2.;
+            (phase(middle) < shell * a ? low : high) = middle;
+        }
+        const double expected = (low + high) / 2.;
+        std::vector<double> depths;
+        for (const auto &p : sites) {
+            const double depth = radius - p.x();
+            if (std::abs(p.y()) < 12. && std::abs(p.z()) < 12. && std::abs(depth - expected) < 2.)
+                depths.push_back(depth);
+        }
+        CAPTURE(correction, angle, shell, expected);
+        REQUIRE_FALSE(depths.empty());
+        std::sort(depths.begin(), depths.end());
+        REQUIRE_THAT(depths[depths.size() / 2], Catch::Matchers::WithinAbs(expected, 0.5));
+    }
+}
+
+TEST_CASE("Density shells cover a dumbbell neck whose inward contour vanishes", "[FillVoronoi][DensityShells]")
+{
+    const double correction = GENERATE(0., 4.);
+    const double decay = GENERATE(0., 6.);
+    const auto sample = [correction](const std::vector<Vec3d> &points) {
+        std::vector<Voronoi::WallDistanceSample> fields;
+        for (const auto &p : points) {
+            const Vec3d q = p.cwiseAbs() - Vec3d(14., 1.2, 1.2);
+            const double neck = q.cwiseMax(0.).norm() + std::min(0., q.maxCoeff());
+            const double lobes = std::min((p - Vec3d(-14., 0., 0.)).norm(), (p - Vec3d(14., 0., 0.)).norm()) - 6.;
+            const double d = std::min(neck, lobes);
+            fields.push_back({d, d + correction});
+        }
+        return fields;
+    };
+    const Voronoi::DensityShellPointCloud cloud(sample, BoundingBoxf3(Vec3d(-20., -6., -6.), Vec3d(20., 6., 6.)), 3., decay);
+    const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-30.), Vec3d::Constant(30.)), 3.);
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) {
+        return std::abs(p.x()) < 4. && std::abs(p.y()) <= 1.2001 && std::abs(p.z()) <= 1.2001;
+    }));
+    // Coverage sites remain sparse, but span the neck rather than just its ends.
+    for (double x : {-5., 0., 5.}) {
+        double nearest = std::numeric_limits<double>::max();
+        for (const auto &p : sites)
+            if (std::abs(p.x()) < 8. && std::abs(p.y()) <= 1.2001 && std::abs(p.z()) <= 1.2001)
+                nearest = std::min(nearest, (p - Vec3d(x, 0., 0.)).norm());
+        REQUIRE(nearest < 4.);
+    }
+}
+
+TEST_CASE("Density shells retain an interior point when the first inward surface vanishes", "[FillVoronoi][DensityShells]")
+{
+    const auto sample = [](const std::vector<Vec3d> &points) {
+        std::vector<Voronoi::WallDistanceSample> fields;
+        for (const auto &p : points) { const double d = p.norm() - 1.2; fields.push_back({d, d}); }
+        return fields;
+    };
+    const Voronoi::DensityShellPointCloud cloud(sample, BoundingBoxf3(Vec3d::Constant(-1.2), Vec3d::Constant(1.2)), 3., 0.);
+    const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-10.), Vec3d::Constant(10.)), 3.);
+    REQUIRE(std::any_of(sites.begin(), sites.end(), [](const Vec3d &p) { return p.norm() < 1.2; }));
+}
+
+TEST_CASE("Canceled density-shell construction can be retried in the object cache", "[FillVoronoi][DensityShells]")
+{
+    const ExPolygons outlines {ExPolygon(rectangle(0., 0., 12., 12.))};
+    Voronoi::WallDistanceCloudCache cache;
+    const auto slices = [&] { return std::vector<Voronoi::WallSlice>{{0., 12., &outlines}}; };
+    const double cancel_at = GENERATE(0., 0.95);
+    REQUIRE_THROWS_AS(cache.get(slices, 0., 0., [cancel_at](Voronoi::WallDistanceStage stage, double fraction) {
+        if (stage == Voronoi::WallDistanceStage::Shells && fraction >= cancel_at) throw std::runtime_error("Canceled");
+    }, 3., true), std::runtime_error);
+    const auto cloud = cache.get(slices, 0., 0., {}, 3., true);
+    REQUIRE(cloud == cache.get(slices, 0., 0., {}, 3., true));
+    REQUIRE_FALSE(cloud->points_in(BoundingBoxf3(Vec3d::Constant(-10.), Vec3d::Constant(22.)), 3.).empty());
+    REQUIRE(cloud != cache.get(slices, 0., 0.));
+}
+
+TEST_CASE("Density-shell orientation changes the cloud without rebuilding wall distances", "[FillVoronoi][DensityShells]")
+{
+    Voronoi::WallDistanceCloudCache cache;
+    const ExPolygons outlines {rectangle(-6., -6., 6., 6.)};
+    const auto slices = [&] { return std::vector<Voronoi::WallSlice>{{-6., 6., &outlines}}; };
+    const auto original = cache.get(slices, 0., 0., {}, 3., true);
+    const double angle = 0.37;
+    const auto rotated = cache.get(slices, 0., 0., [](auto stage, double) {
+        if (stage == Voronoi::WallDistanceStage::Distance) throw std::runtime_error("Distances already cached");
+    }, 3., true, 0, angle);
+    REQUIRE(rotated != original);
+    REQUIRE(rotated == cache.get(slices, 0., 0., {}, 3., true, 0, angle));
+    REQUIRE(original == cache.get(slices, 0., 0., {}, 3., true, 0, 2. * std::acos(-1.)));
+    const BoundingBoxf3 all(Vec3d::Constant(-15.), Vec3d::Constant(15.));
+    REQUIRE(rotated->points_in(all, 3.) != original->points_in(all, 3.));
+    const auto relaxed = cache.get(slices, 0., 0., {}, 3., true, 1, angle);
+    REQUIRE(relaxed == cache.get(slices, 0., 0., {}, 3., true, 1, angle));
+    REQUIRE(relaxed != cache.get(slices, 0., 0., {}, 3., true, 1));
+    REQUIRE_THROWS_AS(cache.get(slices, 0., 0., {}, 3., true, 0,
+        std::numeric_limits<double>::quiet_NaN()), std::invalid_argument);
+}
+
 TEST_CASE("Spring relaxation balances interior edges while holding the cloud boundary", "[FillVoronoi][Relaxation]")
 {
     auto source = std::make_shared<FixedProvider>();
@@ -1379,23 +1691,24 @@ TEST_CASE("Zero relaxation retains the original provider without preparing an ob
     int loads = 0;
     const auto slices = [&] { ++loads; return std::vector<Voronoi::WallSlice>{}; };
     const auto original = cache.get(slices, 0., 0.);
-    REQUIRE(cache.get(slices, 0., 0., {}, 4., 0) == original);
+    REQUIRE(cache.get(slices, 0., 0., {}, 4., false, 0) == original);
     REQUIRE_FALSE(original->extent().has_value());
     REQUIRE(loads == 0);
 }
 
 TEST_CASE("Canceled point relaxation leaves the generated provider reusable", "[FillVoronoi][Relaxation]")
 {
+    const bool shells = GENERATE(false, true);
     const ExPolygons outlines {rectangle(0., 0., 12., 12.)};
     Voronoi::WallDistanceCloudCache cache;
     const auto slices = [&] { return std::vector<Voronoi::WallSlice>{{0., 12., &outlines}}; };
-    const auto original = cache.get(slices, 0., 0., {}, 3.);
+    const auto original = cache.get(slices, 0., 0., {}, 3., shells);
     REQUIRE_THROWS_AS(cache.get(slices, 0., 0., [](Voronoi::WallDistanceStage stage, double fraction) {
         if (stage == Voronoi::WallDistanceStage::Relaxation && fraction > 0.1) throw std::runtime_error("Canceled");
-    }, 3., 3), std::runtime_error);
-    REQUIRE(original == cache.get(slices, 0., 0., {}, 3.));
-    const auto relaxed = cache.get(slices, 0., 0., {}, 3., 3);
-    REQUIRE(relaxed == cache.get(slices, 0., 0., {}, 3., 3));
+    }, 3., shells, 3), std::runtime_error);
+    REQUIRE(original == cache.get(slices, 0., 0., {}, 3., shells));
+    const auto relaxed = cache.get(slices, 0., 0., {}, 3., shells, 3);
+    REQUIRE(relaxed == cache.get(slices, 0., 0., {}, 3., shells, 3));
     REQUIRE(relaxed != original);
     REQUIRE(relaxed->extent()->defined);
 }
