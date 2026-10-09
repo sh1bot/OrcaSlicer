@@ -22,6 +22,10 @@ public:
     // Uniform fields never fall below a threshold at or below the setting.
     virtual std::vector<double> relative_density(const std::vector<Vec3d> &points) const
         { return std::vector<double>(points.size(), 1.); }
+    // Preferred neighbour spacing for optional point relaxation. Unlike hull
+    // density, this also describes the field outside the model.
+    virtual std::vector<double> local_spacing(const std::vector<Vec3d> &points, double nominal_spacing) const
+        { return std::vector<double>(points.size(), nominal_spacing); }
     // A finite field can declare its complete extent, including an undefined
     // box for an empty field. An unbounded field must eventually supply points.
     virtual std::optional<BoundingBoxf3> extent() const { return std::nullopt; }
@@ -47,6 +51,7 @@ public:
     explicit WallDistancePointCloud(WallDistanceSamples distance, double decay = 6.);
     std::vector<Vec3d> points_in(const BoundingBoxf3 &box, double spacing) const override;
     std::vector<double> relative_density(const std::vector<Vec3d> &points) const override;
+    std::vector<double> local_spacing(const std::vector<Vec3d> &points, double nominal_spacing) const override;
     // Relative local infill density, before cubing to obtain site intensity.
     static double density_ratio(double distance, double sampled_mean, double decay = 6.);
 private:

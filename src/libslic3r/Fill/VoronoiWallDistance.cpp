@@ -1,4 +1,5 @@
 #include "VoronoiWallDistance.hpp"
+#include "VoronoiRelaxation.hpp"
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -379,23 +380,45 @@ std::vector<double> CubicWallDistance::sample(const std::vector<Vec3d> &points) 
 }
 
 std::shared_ptr<const PointCloudProvider> WallDistanceCloudCache::get(const std::function<std::vector<WallSlice>()> &load_slices, double decay, double sigma,
-                                                                   const WallDistanceProgress &progress)
+                                                                   const WallDistanceProgress &progress, double site_spacing,
+                                                                   int relaxation_iterations)
 {
+    if (!std::isfinite(site_spacing) || site_spacing < 0. || relaxation_iterations < 0 ||
+        (relaxation_iterations > 0 && site_spacing == 0.))
+        throw std::invalid_argument("Invalid Voronoi point preparation settings");
     if (!std::isfinite(decay) || decay < 0. || !std::isfinite(sigma) || sigma < 0.)
         throw std::invalid_argument("Invalid Voronoi distance settings");
+    if (relaxation_iterations == 0) site_spacing = 0.;
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto &provider = m_providers[{decay, sigma}];
+    const auto bounds = [&] {
+        BoundingBoxf3 box;
+        for (const auto &slice : load_slices())
+            for (const auto &polygon : *slice.contours) {
+                const auto xy = polygon.contour.bounding_box();
+                if (!xy.defined) continue;
+                box.merge(Vec3d(unscale<double>(xy.min.x()), unscale<double>(xy.min.y()), slice.bottom_z));
+                box.merge(Vec3d(unscale<double>(xy.max.x()), unscale<double>(xy.max.y()), slice.top_z));
+            }
+        return box;
+    };
+    // Reuse the point provider when only the relaxation count changes.
+    auto &provider = m_providers[{decay, sigma, 0., 0}];
     if (!provider) {
-        if (decay == 0. && sigma == 0.) {
+        if (decay == 0. && sigma == 0.)
             provider = std::make_shared<PoissonPointCloud>();
-        } else {
+        else {
             auto &table = m_tables[sigma];
             if (!table) table = std::make_shared<CubicWallDistance>(load_slices(), sigma, progress);
-            provider = std::make_shared<WallDistancePointCloud>(
-                [table](const auto &points) { return table->sample_fields(points); }, decay);
+            const WallDistanceSamples sample = [table](const auto &points) { return table->sample_fields(points); };
+            provider = std::make_shared<WallDistancePointCloud>(sample, decay);
         }
     }
-    return provider;
+    if (relaxation_iterations == 0) return provider;
+    auto &relaxed = m_providers[{decay, sigma, site_spacing, relaxation_iterations}];
+    if (!relaxed)
+        relaxed = std::make_shared<RelaxedPointCloud>(provider, bounds(), site_spacing, relaxation_iterations,
+            [&](double fraction) { report(progress, WallDistanceStage::Relaxation, fraction); });
+    return relaxed;
 }
 
 void WallDistanceCloudCache::clear()

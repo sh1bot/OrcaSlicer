@@ -381,3 +381,40 @@ TEST_CASE("Independent Voronoi hull loops can route through an intervening wall"
     REQUIRE(ordered[1].paths.front().points == wall.points);
     REQUIRE(ordered[2].paths.front().first_point() == next);
 }
+
+TEST_CASE("Voronoi extrudes prepared point clouds with native flow and clipping", "[FillVoronoi][Relaxation]")
+{
+    const int iterations = GENERATE(0, 3);
+    const ExPolygon region {Point::new_scale(0., 0.), Point::new_scale(20., 0.),
+                            Point::new_scale(20., 20.), Point::new_scale(0., 20.)};
+    const ExPolygons outlines {region};
+    FillParams params;
+    params.pattern = ipVoronoi;
+    params.density = 0.25f;
+    params.flow = Flow(0.45f, 0.2f, 0.4f);
+    params.using_internal_flow = true;
+    const double spacing = Voronoi::PoissonPointCloud().spacing(params.flow.spacing(), params.flow.height(), params.density);
+    Voronoi::WallDistanceCloudCache cache;
+    const auto cloud = cache.get([&] { return std::vector<Voronoi::WallSlice>{{0., 20., &outlines}}; }, 6., 0., {}, spacing, iterations);
+    FillVoronoi filler;
+    filler.set_point_cloud(cloud);
+    filler.set_bounding_box(region.contour.bounding_box());
+    filler.spacing = params.flow.spacing();
+    filler.angle = 0.f;
+    const Surface surface(stInternal, region);
+    for (int layer : {5, 50, 95}) {
+        filler.layer_id = layer;
+        filler.z = 0.2 * layer;
+        ExtrusionEntityCollection result;
+        filler.fill_surface_extrusion(&surface, params, result.entities);
+        REQUIRE(result.total_volume() > 0.);
+        const auto flat = result.flatten();
+        REQUIRE_FALSE(flat.entities.empty());
+        for (const auto *entity : flat.entities) {
+            const auto *path = dynamic_cast<const ExtrusionPath *>(entity);
+            REQUIRE(path != nullptr);
+            REQUIRE_THAT(path->width, Catch::Matchers::WithinAbs(params.flow.width(), 1e-6));
+            REQUIRE(diff_pl(Polylines{path->polyline.to_polyline()}, region).empty());
+        }
+    }
+}

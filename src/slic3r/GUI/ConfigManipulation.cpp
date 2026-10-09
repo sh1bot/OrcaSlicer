@@ -798,6 +798,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     // gyroid_optimized only applies when the sparse infill pattern is gyroid;
     // hide the whole line otherwise.
     toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid);
+    toggle_line("voronoi_relaxation_iterations", have_infill && pattern == ipVoronoi);
     toggle_line("voronoi_wall_decay", have_infill && pattern == ipVoronoi);
     toggle_line("voronoi_smoothing_sigma", have_infill && pattern == ipVoronoi);
     toggle_line("voronoi_hull_threshold", have_infill && pattern == ipVoronoi);

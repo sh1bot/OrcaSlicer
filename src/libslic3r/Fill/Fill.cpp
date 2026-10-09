@@ -311,6 +311,7 @@ struct SurfaceFillParams
 
     // For Gyroid: when true, use the parameterized "optimized" wave.
     bool gyroid_optimized = false;
+    int voronoi_relaxation_iterations = 0;
     double voronoi_wall_decay = 0.;
     double voronoi_smoothing_sigma = 0.;
     double voronoi_hull_threshold = 0.;
@@ -357,6 +358,7 @@ struct SurfaceFillParams
 		RETURN_COMPARE_NON_EQUAL(skin_infill_depth);
         RETURN_COMPARE_NON_EQUAL(infill_overhang_angle);
 		RETURN_COMPARE_NON_EQUAL(gyroid_optimized);
+        RETURN_COMPARE_NON_EQUAL(voronoi_relaxation_iterations);
         RETURN_COMPARE_NON_EQUAL(voronoi_wall_decay);
         RETURN_COMPARE_NON_EQUAL(voronoi_smoothing_sigma);
         RETURN_COMPARE_NON_EQUAL(voronoi_hull_threshold);
@@ -393,6 +395,7 @@ struct SurfaceFillParams
                 this->center_of_surface_pattern == rhs.center_of_surface_pattern &&
                 this->separated_infills       == rhs.separated_infills &&
                 this->gyroid_optimized        == rhs.gyroid_optimized        &&
+                this->voronoi_relaxation_iterations == rhs.voronoi_relaxation_iterations &&
                 this->voronoi_wall_decay       == rhs.voronoi_wall_decay       &&
                 this->voronoi_smoothing_sigma == rhs.voronoi_smoothing_sigma &&
                 this->voronoi_hull_threshold  == rhs.voronoi_hull_threshold &&
@@ -407,8 +410,10 @@ static void configure_voronoi_cloud(Fill &fill, const SurfaceFillParams &params,
 {
     if (params.pattern != ipVoronoi) return;
     auto &voronoi = static_cast<FillVoronoi &>(fill);
-    if (params.voronoi_wall_decay != 0. || params.voronoi_smoothing_sigma != 0.)
-        voronoi.set_point_cloud(object.voronoi_point_cloud(params.voronoi_wall_decay, params.voronoi_smoothing_sigma));
+    const double site_spacing = params.voronoi_relaxation_iterations > 0 ?
+        Voronoi::PoissonPointCloud().spacing(params.spacing, object.config().layer_height.value, 0.01 * params.density) : 0.;
+    if (site_spacing > 0. || params.voronoi_wall_decay != 0. || params.voronoi_smoothing_sigma != 0.)
+        voronoi.set_point_cloud(object.voronoi_point_cloud(params.voronoi_wall_decay, params.voronoi_smoothing_sigma, site_spacing, params.voronoi_relaxation_iterations));
     voronoi.set_hull_threshold(params.voronoi_hull_threshold);
 }
 
@@ -1023,6 +1028,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 // Orca: Likewise separated_infills only where it can move the pattern.
                 params.separated_infills = region_config.separated_infills && is_separable_infill_pattern(params.pattern) &&
                                            params.extrusion_role != erTopSolidInfill && params.extrusion_role != erBottomSurface;
+                params.voronoi_relaxation_iterations = params.pattern == ipVoronoi ? region_config.voronoi_relaxation_iterations.value : 0;
                 params.voronoi_wall_decay = params.pattern == ipVoronoi ? region_config.voronoi_wall_decay.value : 0.;
                 params.voronoi_smoothing_sigma = params.pattern == ipVoronoi ? region_config.voronoi_smoothing_sigma.value : 0.;
                 params.voronoi_hull_threshold = params.pattern == ipVoronoi ? 0.01 * region_config.voronoi_hull_threshold.value : 0.;

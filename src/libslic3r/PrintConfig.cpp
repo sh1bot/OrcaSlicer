@@ -3574,6 +3574,14 @@ void PrintConfigDef::init_fff_params()
     def = this->add("voronoi_point_distribution", coString);
     def->set_default_value(new ConfigOptionString());
 
+    def = this->add("voronoi_relaxation_iterations", coInt);
+    def->label = L("Voronoi relaxation iterations");
+    def->category = L("Strength");
+    def->tooltip = L("Spring-relax the three-dimensional control points to balance Delaunay edge lengths according to local density. Zero disables relaxation. Try 3 to 5 iterations initially; more iterations increase preparation time.");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
     def = this->add("voronoi_wall_decay", coFloat);
     def->label = L("Voronoi wall proximity decay");
     def->category = L("Strength");

@@ -23,6 +23,21 @@ of the supplied points' 3D Voronoi cells. Shallow faces also produce floor
 polygons. Geometry clipping removes overlapping floors and wall sections within
 floors while retaining their supporting boundaries.
 
+## Optional point relaxation
+
+Relaxation iterations defaults to zero, leaving the original provider unchanged.
+A nonzero count prepares a saved object-wide constellation, including exterior
+neighbours, after point generation. Each iteration rebuilds its 3D Delaunay
+mesh and balances edge lengths against the density-dependent preferred spacing.
+Damped simultaneous steps are limited to 10% of nominal site spacing per pass;
+convex-hull sites remain fixed to prevent the field shrinking at its boundary.
+Three to five iterations are a useful starting range.
+
+Relaxed points are cached and queried consistently across layers. The density
+field and optional inner hull remain unchanged. Preparation checks cancellation
+and reports progress. Relaxation costs additional memory and computation and
+cannot eliminate every acute section of a 3D cell.
+
 ## Extrusion and routing
 
 Faces become single wall lines when successive layers have at least half-bead

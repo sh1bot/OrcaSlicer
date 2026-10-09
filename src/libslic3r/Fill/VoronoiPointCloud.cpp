@@ -136,6 +136,17 @@ std::vector<double> WallDistancePointCloud::relative_density(const std::vector<V
     return ratios;
 }
 
+std::vector<double> WallDistancePointCloud::local_spacing(const std::vector<Vec3d> &points, double nominal_spacing) const
+{
+    const auto fields = m_distance(points);
+    if (fields.size() != points.size()) throw std::invalid_argument("Invalid Voronoi distance samples");
+    std::vector<double> result;
+    result.reserve(fields.size());
+    for (const auto &field : fields)
+        result.push_back(nominal_spacing / density_ratio(field.distance, field.smoothed, m_decay));
+    return result;
+}
+
 ActivePointCloud::ActivePointCloud(std::shared_ptr<const PointCloudProvider> provider) : m_provider(std::move(provider))
 {
     if (!m_provider) throw std::invalid_argument("Missing Voronoi point-cloud provider");

@@ -1183,6 +1183,7 @@ static std::vector<std::string> s_Preset_print_options{
     "fill_multiline",
     "gyroid_optimized",
     "sparse_infill_pattern",
+    "voronoi_relaxation_iterations",
     "voronoi_wall_decay",
     "voronoi_smoothing_sigma",
     "voronoi_hull_threshold",

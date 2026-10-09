@@ -3,6 +3,7 @@
 #include "libslic3r/Fill/VoronoiInfill.hpp"
 #include "libslic3r/Fill/VoronoiRouting.hpp"
 #include "libslic3r/Fill/VoronoiWallDistance.hpp"
+#include "libslic3r/Fill/VoronoiRelaxation.hpp"
 #include "libslic3r/Fill/VoronoiHull.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/EdgeGrid.hpp"
@@ -1306,4 +1307,95 @@ TEST_CASE("Canceled Voronoi smoothing leaves the cache usable", "[FillVoronoi]")
     REQUIRE(provider != nullptr);
     REQUIRE(cache.get(slices, 6., 2.,
         [](auto, double) { throw std::runtime_error("cached tables must not rebuild"); }) == provider);
+}
+
+TEST_CASE("Spring relaxation balances interior edges while holding the cloud boundary", "[FillVoronoi][Relaxation]")
+{
+    auto source = std::make_shared<FixedProvider>();
+    for (double x : {-3., 3.})
+        for (double y : {-3., 3.})
+            for (double z : {-3., 3.}) source->sites.emplace_back(x, y, z);
+    const Vec3d off_center(0.8, 0.4, 0.);
+    source->sites.push_back(off_center);
+    const BoundingBoxf3 all(Vec3d::Constant(-4.), Vec3d::Constant(4.));
+    Voronoi::RelaxedPointCloud cloud(source, all, 2., 5);
+    const auto sites = cloud.points_in(all, 2.);
+    REQUIRE(sites.size() == source->sites.size());
+    for (size_t i = 0; i < 8; ++i) REQUIRE(std::find(sites.begin(), sites.end(), source->sites[i]) != sites.end());
+    const auto center = std::find_if(sites.begin(), sites.end(), [](const Vec3d &p) { return p.cwiseAbs().maxCoeff() < 3.; });
+    REQUIRE(center != sites.end());
+    REQUIRE(center->norm() < off_center.norm());
+    REQUIRE((*center - off_center).norm() <= 5. * 0.1 * 2.);
+    auto split = cloud.points_in(BoundingBoxf3(all.min, Vec3d(4., 4., 0.)), 2.);
+    append(split, cloud.points_in(BoundingBoxf3(Vec3d(-4., -4., 0.), all.max), 2.));
+    REQUIRE(split == sites);
+    const Voronoi::RelaxedPointCloud rebuilt(source, all, 2., 5);
+    REQUIRE(rebuilt.points_in(all, 2.) == sites);
+}
+
+TEST_CASE("Spring relaxation follows the provider's preferred local spacing", "[FillVoronoi][Relaxation]")
+{
+    class SpacedProvider : public FixedProvider {
+    public:
+        double target = 2.;
+        std::vector<double> local_spacing(const std::vector<Vec3d> &points, double) const override
+            { return std::vector<double>(points.size(), target); }
+    };
+    auto source = std::make_shared<SpacedProvider>();
+    for (double x : {-3., 3.})
+        for (double y : {-3., 3.})
+            for (double z : {-3., 3.}) source->sites.emplace_back(x, y, z);
+    const Vec3d initial(0.8, 0.4, 0.);
+    source->sites.push_back(initial);
+    const BoundingBoxf3 all(Vec3d::Constant(-4.), Vec3d::Constant(4.));
+    const auto moved_center = [&](double target) {
+        source->target = target;
+        const Voronoi::RelaxedPointCloud cloud(source, all, 2., 1);
+        const auto points = cloud.points_in(all, 2.);
+        const auto center = std::find_if(points.begin(), points.end(), [](const Vec3d &p) { return p.cwiseAbs().maxCoeff() < 3.; });
+        REQUIRE(center != points.end());
+        return Vec3d(*center);
+    };
+    REQUIRE(moved_center(2.).norm() < initial.norm());
+    REQUIRE(moved_center(16.).norm() > initial.norm());
+}
+
+TEST_CASE("Relaxation spacing retains the density falloff outside the model", "[FillVoronoi][Relaxation]")
+{
+    const Voronoi::WallDistancePointCloud source([](const std::vector<Vec3d> &points) {
+        std::vector<Voronoi::WallDistanceSample> result;
+        for (const auto &p : points) result.push_back({p.x(), p.x()});
+        return result;
+    }, 6.);
+    const auto spacing = source.local_spacing({Vec3d(-10., 0., 0.), Vec3d(10., 0., 0.), Vec3d(-1., 0., 0.)}, 4.);
+    REQUIRE_THAT(spacing[0], Catch::Matchers::WithinAbs(spacing[1], EPSILON));
+    REQUIRE(spacing[0] > spacing[2]);
+    REQUIRE_THAT(spacing[2], Catch::Matchers::WithinAbs(4., EPSILON));
+}
+
+TEST_CASE("Zero relaxation retains the original provider without preparing an object cloud", "[FillVoronoi][Relaxation]")
+{
+    Voronoi::WallDistanceCloudCache cache;
+    int loads = 0;
+    const auto slices = [&] { ++loads; return std::vector<Voronoi::WallSlice>{}; };
+    const auto original = cache.get(slices, 0., 0.);
+    REQUIRE(cache.get(slices, 0., 0., {}, 4., 0) == original);
+    REQUIRE_FALSE(original->extent().has_value());
+    REQUIRE(loads == 0);
+}
+
+TEST_CASE("Canceled point relaxation leaves the generated provider reusable", "[FillVoronoi][Relaxation]")
+{
+    const ExPolygons outlines {rectangle(0., 0., 12., 12.)};
+    Voronoi::WallDistanceCloudCache cache;
+    const auto slices = [&] { return std::vector<Voronoi::WallSlice>{{0., 12., &outlines}}; };
+    const auto original = cache.get(slices, 0., 0., {}, 3.);
+    REQUIRE_THROWS_AS(cache.get(slices, 0., 0., [](Voronoi::WallDistanceStage stage, double fraction) {
+        if (stage == Voronoi::WallDistanceStage::Relaxation && fraction > 0.1) throw std::runtime_error("Canceled");
+    }, 3., 3), std::runtime_error);
+    REQUIRE(original == cache.get(slices, 0., 0., {}, 3.));
+    const auto relaxed = cache.get(slices, 0., 0., {}, 3., 3);
+    REQUIRE(relaxed == cache.get(slices, 0., 0., {}, 3., 3));
+    REQUIRE(relaxed != original);
+    REQUIRE(relaxed->extent()->defined);
 }

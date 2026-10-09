@@ -1383,6 +1383,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionString,               sparse_infill_rotate_template))
     ((ConfigOptionPercent,              sparse_infill_density))
     ((ConfigOptionEnum<InfillPattern>,  sparse_infill_pattern))
+    ((ConfigOptionInt,                  voronoi_relaxation_iterations))
     ((ConfigOptionFloat,                voronoi_wall_decay))
     ((ConfigOptionFloat,                voronoi_smoothing_sigma))
     ((ConfigOptionPercent,              voronoi_hull_threshold))
