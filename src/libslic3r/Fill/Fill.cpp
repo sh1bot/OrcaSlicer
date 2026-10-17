@@ -320,6 +320,7 @@ struct SurfaceFillParams
     bool voronoi_trace_shell = false;
     double voronoi_wall_decay = 0.;
     double voronoi_smoothing_sigma = 0.;
+    double voronoi_hull_threshold = 0.;
     int voronoi_density_region = -1;
 
     // Orca: corner smoothing factor in the range [0, 1].
@@ -371,6 +372,7 @@ struct SurfaceFillParams
         RETURN_COMPARE_NON_EQUAL(voronoi_trace_shell);
         RETURN_COMPARE_NON_EQUAL(voronoi_wall_decay);
         RETURN_COMPARE_NON_EQUAL(voronoi_smoothing_sigma);
+        RETURN_COMPARE_NON_EQUAL(voronoi_hull_threshold);
         RETURN_COMPARE_NON_EQUAL(voronoi_density_region);
         RETURN_COMPARE_NON_EQUAL(smooth_factor);
         RETURN_COMPARE_NON_EQUAL(center_of_surface_pattern);
@@ -412,6 +414,7 @@ struct SurfaceFillParams
                 this->voronoi_trace_shell == rhs.voronoi_trace_shell &&
                 this->voronoi_wall_decay       == rhs.voronoi_wall_decay       &&
                 this->voronoi_smoothing_sigma == rhs.voronoi_smoothing_sigma &&
+                this->voronoi_hull_threshold  == rhs.voronoi_hull_threshold &&
                 this->voronoi_density_region == rhs.voronoi_density_region &&
                 this->smooth_factor           == rhs.smooth_factor           &&
                 this->fill_order              == rhs.fill_order;
@@ -429,7 +432,7 @@ static void configure_voronoi_cloud(Fill &fill, const SurfaceFillParams &params,
     const double site_spacing = params.voronoi_snap_to_wall || params.voronoi_relaxation_iterations > 0 ?
         Voronoi::PoissonPointCloud().spacing(params.spacing * params.multiline, object.config().layer_height.value, 0.01 * params.density) : 0.;
     voronoi.set_point_cloud(object.voronoi_point_cloud(params.voronoi_wall_decay, params.voronoi_smoothing_sigma,
-        site_spacing, params.voronoi_cloud_method, params.voronoi_relaxation_iterations, params.voronoi_cloud_angle, params.voronoi_snap_to_wall, 0.01 * params.density, params.voronoi_density_region), cache);
+        site_spacing, params.voronoi_cloud_method, params.voronoi_relaxation_iterations, params.voronoi_cloud_angle, params.voronoi_snap_to_wall, 0.01 * params.density, params.voronoi_density_region, params.voronoi_hull_threshold), cache);
     if (params.voronoi_trace_shell) {
         ExPolygons boundaries;
         for (const LayerRegion *region : layer.regions()) append(boundaries, region->fill_expolygons);
@@ -1069,6 +1072,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 params.voronoi_trace_shell = params.pattern == ipVoronoi && region_config.voronoi_trace_shell.value;
                 params.voronoi_wall_decay = params.pattern == ipVoronoi ? region_config.voronoi_wall_decay.value : 0.;
                 params.voronoi_smoothing_sigma = params.pattern == ipVoronoi ? region_config.voronoi_smoothing_sigma.value : 0.;
+                params.voronoi_hull_threshold = params.pattern == ipVoronoi ? 0.01 * region_config.voronoi_hull_threshold.value : 0.;
 
                 if (params.extrusion_role == erInternalInfill) {
                     params.angle = calculate_infill_rotation_angle(layer.object(), layer.id(), region_config.infill_direction.value,
