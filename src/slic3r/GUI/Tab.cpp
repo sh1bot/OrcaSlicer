@@ -2955,6 +2955,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("voronoi_modifier_blend");
         optgroup->append_single_option_line("fill_multiline", "strength_settings_infill#fill-multiline");
         optgroup->append_single_option_line("sparse_infill_pattern", "strength_settings_infill#sparse-infill-pattern");
+        optgroup->append_single_option_line("voronoi_cloud_method");
         optgroup->append_single_option_line("voronoi_wall_decay");
         optgroup->append_single_option_line("voronoi_smoothing_sigma");
         optgroup->append_single_option_line("gyroid_optimized", "strength_settings_patterns#gyroid-optimized");
