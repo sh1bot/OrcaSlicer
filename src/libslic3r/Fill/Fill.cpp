@@ -9,6 +9,7 @@
 #include <map>
 #include <stdio.h>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <queue>
@@ -28,6 +29,7 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "ExtrusionEntity.hpp"
 #include "Fill.hpp"
+#include "FillVoronoi.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
 #include "FillAdaptive.hpp"
 #include "FillRectilinear.hpp"
@@ -310,6 +312,7 @@ struct SurfaceFillParams
 
     // For Gyroid: when true, use the parameterized "optimized" wave.
     bool gyroid_optimized = false;
+    double voronoi_cloud_angle = 0.;
 
     // Orca: corner smoothing factor in the range [0, 1].
     double      smooth_factor { 0. };
@@ -386,10 +389,42 @@ struct SurfaceFillParams
                 this->center_of_surface_pattern == rhs.center_of_surface_pattern &&
                 this->separated_infills       == rhs.separated_infills &&
                 this->gyroid_optimized        == rhs.gyroid_optimized        &&
+                this->voronoi_cloud_angle      == rhs.voronoi_cloud_angle      &&
                 this->smooth_factor           == rhs.smooth_factor           &&
                 this->fill_order              == rhs.fill_order;
 	}
 };
+
+// Point providers and physical support are configured before geometry and routing.
+static void configure_voronoi_cloud(Fill &fill, const SurfaceFillParams &params, const Layer &layer,
+                                    std::optional<ExPolygons> &floor_support, VoronoiInfillCache *cache = nullptr)
+{
+    if (params.pattern != ipVoronoi) return;
+    const Vec2d center = layer.object()->bounding_box().center().cast<double>() * SCALING_FACTOR;
+    const double angle = params.voronoi_cloud_angle;
+    std::shared_ptr<const Voronoi::PointCloudProvider> provider;
+    if (cache) {
+        auto &cached = cache->rotated_clouds[{angle, center.x(), center.y()}];
+        if (!cached) cached = std::make_shared<Voronoi::PoissonPointCloud>(angle, center);
+        provider = cached;
+    } else {
+        provider = std::make_shared<Voronoi::PoissonPointCloud>(angle, center);
+    }
+    auto &voronoi = static_cast<FillVoronoi &>(fill);
+    voronoi.set_point_cloud(provider, cache);
+    voronoi.set_z_range(Vec2d(layer.object()->layers().front()->bottom_z(), layer.object()->layers().back()->print_z));
+    if (layer.lower_layer) {
+        // Perimeters are complete before parallel infill generation; lower-layer
+        // infill is not. Use bead footprints rather than solid slice outlines.
+        if (!floor_support) {
+            Polygons support;
+            for (const LayerRegion *region : layer.lower_layer->regions())
+                region->perimeters.polygons_covered_by_width(support, float(SCALED_EPSILON));
+            floor_support = union_ex(support);
+        }
+        voronoi.set_floor_support(*floor_support);
+    }
+}
 
 struct SurfaceFill {
 	SurfaceFill(const SurfaceFillParams& params) : region_id(size_t(-1)), surface(stCount, ExPolygon()), params(params) {}
@@ -999,6 +1034,9 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 // (which would unnecessarily split fill batching).
                 // Stored on SurfaceFillParams; copied to FillParams during conversion.
                 params.gyroid_optimized = (params.pattern == ipGyroid) && region_config.gyroid_optimized;
+                // A 3D constellation keeps one orientation across layers.
+                params.voronoi_cloud_angle = params.pattern == ipVoronoi ?
+                    Geometry::deg2rad(region_config.infill_direction.value) : 0.;
                 // Orca: Likewise separated_infills only where it can move the pattern.
                 params.separated_infills = region_config.separated_infills && is_separable_infill_pattern(params.pattern) &&
                                            params.extrusion_role != erTopSolidInfill && params.extrusion_role != erBottomSurface;
@@ -1032,6 +1070,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                     auto m = layer.object()->trafo().matrix();
                     align_offset = atan2((float)m(1, 0), (float)m(0, 0));
                     params.angle += align_offset;
+                    if (params.pattern == ipVoronoi) params.voronoi_cloud_angle += align_offset;
                 }
 
                 // Calculate the actual flow we'll be using for this infill.
@@ -1320,7 +1359,7 @@ void export_group_fills_to_svg(const char *path, const std::vector<SurfaceFill> 
 #endif
 
 // friend to Layer
-void Layer::make_fills(const FillAdaptive::Octrees* adaptive_fill_octrees, const FillAdaptive::Octrees* support_fill_octrees, FillLightning::Generator* lightning_generator)
+void Layer::make_fills(const FillAdaptive::Octrees* adaptive_fill_octrees, const FillAdaptive::Octrees* support_fill_octrees, FillLightning::Generator* lightning_generator, VoronoiInfillCache *voronoi_cache)
 {
 	for (LayerRegion *layerm : m_regions)
 		layerm->fills.clear();
@@ -1341,9 +1380,11 @@ void Layer::make_fills(const FillAdaptive::Octrees* adaptive_fill_octrees, const
 	}
 #endif /* SLIC3R_DEBUG_SLICE_PROCESSING */
 
+    std::optional<ExPolygons> voronoi_floor_support;
     for (SurfaceFill &surface_fill : surface_fills) {
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));
+        configure_voronoi_cloud(*f, surface_fill.params, *this, voronoi_floor_support, voronoi_cache);
         f->set_bounding_box(bbox);
         f->layer_id = this->id();
         {
@@ -1525,6 +1566,7 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
 
     Polylines sparse_infill_polylines{};
 
+    std::optional<ExPolygons> voronoi_floor_support;
     for (SurfaceFill &surface_fill : surface_fills) {
 		if (surface_fill.surface.surface_type != stInternal) {
 			continue;
@@ -1553,6 +1595,7 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         case ipLateralHoneycomb:
         case ip3DHoneycomb:
         case ipGyroid:
+        case ipVoronoi:
         case ipTpmsD:
         case ipTpmsFK:
         case ipHilbertCurve:
@@ -1565,6 +1608,7 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
 
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));
+        configure_voronoi_cloud(*f, surface_fill.params, *this, voronoi_floor_support);
         f->set_bounding_box(bbox);
         f->layer_id = this->id() - this->object()->get_layer(0)->id(); // We need to subtract raft layers.
         {
