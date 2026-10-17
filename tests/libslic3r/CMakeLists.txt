@@ -33,6 +33,7 @@ add_executable(${_TEST_NAME}_tests
     test_fill_corner_smoothing.cpp
     test_filament_mixer.cpp
     test_fill_plane_path.cpp
+    test_sliced_distance_field.cpp
     test_fill_voronoi.cpp
     test_fill_voronoi_surface.cpp
     test_shortest_path.cpp
