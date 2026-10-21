@@ -19,6 +19,7 @@ struct PointCloudSettings {
     double site_spacing = 0.;
     VoronoiCloudMethod method = VoronoiCloudMethod::Random;
     int relaxation_iterations = 0;
+    double angle = 0.;
     bool snap = false;
     int region_id = -1;
 };
@@ -35,7 +36,7 @@ public:
 private:
     std::mutex m_mutex;
     InfillDensityCache m_fields;
-    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, VoronoiCloudMethod, int, bool, double, AdaptiveInfillGradient>, std::shared_ptr<const PointCloudProvider>> m_providers;
+    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, VoronoiCloudMethod, int, double, bool, double, AdaptiveInfillGradient>, std::shared_ptr<const PointCloudProvider>> m_providers;
 };
 
 } // namespace Slic3r::Voronoi

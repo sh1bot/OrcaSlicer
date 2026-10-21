@@ -6,6 +6,7 @@
 #include <functional>
 #include "VoronoiWallDistance.hpp"
 #include "libslic3r/BoundingBox.hpp"
+#include "libslic3r/Point.hpp"
 #include "libslic3r/VoronoiCloudMethod.hpp"
 #include "VoronoiLattice.hpp"
 #include "VoronoiWallSnap.hpp"
@@ -22,7 +23,7 @@ namespace Slic3r::Voronoi {
 std::shared_ptr<const PointCloudProvider> WallDistanceCloudCache::get(const std::function<std::vector<WallSlice>()> &load_slices,
     const PointCloudSettings &settings, const WallDistanceProgress &progress, const std::vector<DensityModifier> &modifiers)
 {
-    auto [density, site_spacing, method, relaxation_iterations, snap, region_id] = settings;
+    auto [density, site_spacing, method, relaxation_iterations, angle, snap, region_id] = settings;
     const auto [mode, sigma, material_density, interior_density, gradient] = density;
     if (!std::isfinite(site_spacing) || site_spacing < 0. || relaxation_iterations < 0 || relaxation_iterations > RelaxedPointCloud::maximum_iterations ||
         ((snap || relaxation_iterations > 0) && site_spacing == 0.))
@@ -31,6 +32,9 @@ std::shared_ptr<const PointCloudProvider> WallDistanceCloudCache::get(const std:
         !std::isfinite(interior_density) || interior_density <= 0. || interior_density > 1. ||
             !std::isfinite(sigma) || sigma < 0. || sigma > InfillDensityField::maximum_smoothing_sigma)
         throw std::invalid_argument("Invalid Voronoi distance settings");
+    if (!std::isfinite(angle)) throw std::invalid_argument("Invalid Voronoi cloud angle");
+    angle = std::fmod(angle, 2. * std::acos(-1.));
+    if (angle < 0.) angle += 2. * std::acos(-1.);
     std::lock_guard<std::mutex> lock(m_mutex);
     const auto bounds = [&] {
         BoundingBoxf3 box;
@@ -50,26 +54,31 @@ std::shared_ptr<const PointCloudProvider> WallDistanceCloudCache::get(const std:
         table = m_fields.get(load_slices, {mode, sigma, material_density, interior_density, gradient}, progress, modifiers, region_id);
         sample = [table](const auto &points) { return table->sample_fields(points); };
     }
-    auto &provider = m_providers[{mode, sigma, material_density, region_id, 0., method, 0, false, interior_density, gradient}];
+    auto &provider = m_providers[{mode, sigma, material_density, region_id, 0., method, 0, angle, false, interior_density, gradient}];
     if (!provider) {
+        Vec2d center = Vec2d::Zero();
+        if (angle != 0.) {
+            const BoundingBoxf3 box = bounds();
+            if (box.defined) center = box.center().head<2>();
+        }
         const bool variable = mode != AdaptiveInfillMode::Disabled || sigma != 0. || fused;
         if (method != VoronoiCloudMethod::Random)
-            provider = std::make_shared<LatticePointCloud>(method, variable ? sample : WallDistanceSamples{}, table ? table->maximum_density_ratio() : 1.);
+            provider = std::make_shared<LatticePointCloud>(method, variable ? sample : WallDistanceSamples{}, table ? table->maximum_density_ratio() : 1., angle, center);
         else if (variable)
-            provider = std::make_shared<WallDistancePointCloud>(sample, table->maximum_density_ratio());
+            provider = std::make_shared<WallDistancePointCloud>(sample, table->maximum_density_ratio(), angle, center);
         else
-            provider = std::make_shared<PoissonPointCloud>();
+            provider = std::make_shared<PoissonPointCloud>(angle, center);
     }
     std::shared_ptr<const PointCloudProvider> result = provider;
     if (relaxation_iterations > 0) {
-        auto &relaxed = m_providers[{mode, sigma, material_density, region_id, site_spacing, method, relaxation_iterations, false, interior_density, gradient}];
+        auto &relaxed = m_providers[{mode, sigma, material_density, region_id, site_spacing, method, relaxation_iterations, angle, false, interior_density, gradient}];
         if (!relaxed)
             relaxed = std::make_shared<RelaxedPointCloud>(provider, bounds(), site_spacing, relaxation_iterations,
                 [&](double fraction) { if (progress) progress(WallDistanceStage::Relaxation, fraction); });
         result = relaxed;
     }
     if (snap) {
-        auto &snapped = m_providers[{mode, sigma, material_density, region_id, site_spacing, method, relaxation_iterations, true, interior_density, gradient}];
+        auto &snapped = m_providers[{mode, sigma, material_density, region_id, site_spacing, method, relaxation_iterations, angle, true, interior_density, gradient}];
         if (!snapped)
             snapped = std::make_shared<SnappedPointCloud>(result, sample, site_spacing, table->grid_spacing());
         result = snapped;
