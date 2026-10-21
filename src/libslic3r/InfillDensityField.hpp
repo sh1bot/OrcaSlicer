@@ -45,7 +45,7 @@ struct DensityModifier {
     std::optional<AdaptiveInfillMode> mode;
 };
 
-enum class WallDistanceStage { Distance, Encoding, SmoothDistance, SmoothReinforcement, MaterialDensity, Modifiers, Relaxation, Complete };
+enum class WallDistanceStage { Distance, Encoding, SmoothDistance, SmoothReinforcement, MaterialDensity, Modifiers, Relaxation, VoidRefinement, Complete };
 // Called synchronously during construction, including within long phases.
 // The callback may throw to cancel construction; no partial table is cached.
 using WallDistanceProgress = std::function<void(WallDistanceStage, double)>;
@@ -82,6 +82,7 @@ struct InfillDensitySettings {
     double material_density = 0.25;
     double interior_density = 0.05;
     AdaptiveInfillGradient gradient = AdaptiveInfillGradient::Linear;
+    bool slice_slabs = false;
 
     static InfillDensitySettings from_config(const PrintRegionConfig &config)
     {
@@ -98,15 +99,16 @@ public:
         const std::vector<DensityModifier> &modifiers = {}, int region_id = -1);
     std::shared_ptr<const AdaptiveInfillField> geometry(const std::function<std::vector<WallSlice>()> &load_slices,
         AdaptiveInfillMode mode, bool signed_distances = true,
-        const WallDistanceProgress &progress = {});
-    const AdaptiveInfillFields &profiles(bool signed_distances) const { return m_geometry[size_t(signed_distances)]; }
+        const WallDistanceProgress &progress = {}, bool slice_slabs = false);
+    const AdaptiveInfillFields &profiles(bool signed_distances, bool slice_slabs = false) const
+        { return m_geometry[size_t(signed_distances) + 2 * size_t(slice_slabs)]; }
     void clear();
 private:
     std::mutex m_mutex;
     // The object and density evaluators use these same prepared profile arrays.
-    std::array<AdaptiveInfillFields, 2> m_geometry;
-    std::map<std::pair<int, bool>, std::shared_ptr<const AdaptiveInfillDistanceField>> m_distances;
-    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, AdaptiveInfillGradient>, std::shared_ptr<const InfillDensityField>> m_fields;
+    std::array<AdaptiveInfillFields, 4> m_geometry;
+    std::map<std::tuple<int, bool, bool>, std::shared_ptr<const AdaptiveInfillDistanceField>> m_distances;
+    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, AdaptiveInfillGradient, bool>, std::shared_ptr<const InfillDensityField>> m_fields;
 };
 
 } // namespace Slic3r

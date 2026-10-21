@@ -211,6 +211,7 @@ set(lisbslic3r_sources
     Fill/VoronoiRelaxation.hpp
     Fill/VoronoiRouting.cpp
     Fill/VoronoiRouting.hpp
+    Fill/VoronoiVoid.hpp
     Fill/VoronoiWallDistance.cpp
     Fill/VoronoiWallDistance.hpp
     Fill/VoronoiWallSnap.hpp
@@ -655,6 +656,7 @@ add_library(libslic3r_cgal STATIC
     CutSurface.hpp CutSurface.cpp
     Fill/VoronoiInfillCgal.cpp
     Fill/VoronoiRelaxation.cpp
+    Fill/VoronoiVoid.cpp
     Fill/VoronoiWallSnap.cpp
     IntersectionPoints.hpp IntersectionPoints.cpp
     MeshBoolean.hpp MeshBoolean.cpp

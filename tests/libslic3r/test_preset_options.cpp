@@ -102,6 +102,7 @@ TEST_CASE("Print presets initialize and retain shared Voronoi density settings a
     REQUIRE_FALSE(config.opt_bool("voronoi_trace_shell"));
     config.set_deserialize_strict("voronoi_trace_shell", "1");
     REQUIRE(config.opt_bool("voronoi_trace_shell"));
+    REQUIRE_THAT(config.option<ConfigOptionPercent>("voronoi_hull_threshold")->value, Catch::Matchers::WithinAbs(0., EPSILON));
     REQUIRE_FALSE(config.opt_bool("voronoi_snap_to_wall"));
     config.set_deserialize_strict("voronoi_snap_to_wall", "1");
     REQUIRE(config.opt_bool("voronoi_snap_to_wall"));

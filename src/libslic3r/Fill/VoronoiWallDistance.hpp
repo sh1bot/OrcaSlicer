@@ -22,6 +22,7 @@ struct PointCloudSettings {
     double angle = 0.;
     bool snap = false;
     int region_id = -1;
+    double hull_threshold = 0.;
 };
 
 // Owned by a PrintObject. Initialization is serialized; providers and distance
@@ -36,7 +37,7 @@ public:
 private:
     std::mutex m_mutex;
     InfillDensityCache m_fields;
-    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, VoronoiCloudMethod, int, double, bool, double, AdaptiveInfillGradient>, std::shared_ptr<const PointCloudProvider>> m_providers;
+    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, VoronoiCloudMethod, int, double, bool, double, AdaptiveInfillGradient, double>, std::shared_ptr<const PointCloudProvider>> m_providers;
 };
 
 } // namespace Slic3r::Voronoi

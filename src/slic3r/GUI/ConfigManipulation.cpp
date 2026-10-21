@@ -861,6 +861,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("voronoi_cloud_method", have_infill && pattern == ipVoronoi);
     toggle_line("voronoi_relaxation_iterations", have_infill && pattern == ipVoronoi);
     toggle_line("voronoi_snap_to_wall", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_hull_threshold", have_infill && pattern == ipVoronoi);
     toggle_line("voronoi_trace_shell", have_infill && pattern == ipVoronoi);
     toggle_line("infill_smoothing_sigma", have_infill && (shared_density_infill ||
         (have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") == AdaptiveInfillMode::SmoothBlend)));
