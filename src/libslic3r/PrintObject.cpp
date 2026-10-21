@@ -1330,7 +1330,7 @@ const AdaptiveInfillFields &PrintObject::prepare_adaptive_infill_fields() const
 {
     const bool signed_distances = needs_signed_infill_distances();
     auto &cache = m_voronoi_cloud_cache.density_fields();
-    const auto &fields = cache.profiles(signed_distances);
+    const auto &fields = cache.profiles(signed_distances, m_config.infill_slice_slab_distances.value);
     std::array<bool, size_t(AdaptiveInfillMode::Count)> modes{};
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
         if (const PrintRegionConfig &config = this->printing_region(region_id).config();
@@ -1353,7 +1353,8 @@ const AdaptiveInfillFields &PrintObject::prepare_adaptive_infill_fields() const
     };
     for (size_t mode = 0; mode < modes.size(); ++mode) {
         if (!modes[mode]) continue;
-        cache.geometry(load_slices, AdaptiveInfillMode(mode), signed_distances, infill_preparation_progress());
+        cache.geometry(load_slices, AdaptiveInfillMode(mode), signed_distances, infill_preparation_progress(),
+            m_config.infill_slice_slab_distances.value);
     }
     return fields;
 }
@@ -1406,11 +1407,13 @@ WallDistanceProgress PrintObject::infill_preparation_progress() const
 
 std::shared_ptr<const InfillDensityField> PrintObject::infill_density_field(const InfillDensitySettings &settings, int region_id) const
 {
+    auto object_settings = settings;
+    object_settings.slice_slabs = m_config.infill_slice_slab_distances.value;
     return m_voronoi_cloud_cache.density_fields().get([this] {
         std::vector<WallSlice> slices;
         for (const Layer *layer : layers()) slices.push_back({layer->bottom_z(), layer->print_z, &layer->lslices});
         return slices;
-    }, settings, infill_preparation_progress(), m_infill_density_modifiers, region_id);
+    }, object_settings, infill_preparation_progress(), m_infill_density_modifiers, region_id);
 }
 
 double PrintObject::voronoi_site_spacing(const PrintRegion &region) const
@@ -1426,6 +1429,7 @@ Voronoi::PointCloudSettings PrintObject::voronoi_cloud_settings(const PrintRegio
     const auto &config = region.config();
     Voronoi::PointCloudSettings settings;
     settings.density = InfillDensitySettings::from_config(config);
+    settings.density.slice_slabs = m_config.infill_slice_slab_distances.value;
     settings.site_spacing = voronoi_site_spacing(region);
     settings.method = config.voronoi_cloud_method.value;
     settings.relaxation_iterations = config.voronoi_relaxation_iterations.value;
@@ -1856,6 +1860,7 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (opt_key == "sparse_infill_pattern"
                    || opt_key == "voronoi_relaxation_iterations" || opt_key == "voronoi_trace_shell" || opt_key == "voronoi_snap_to_wall" || opt_key == "voronoi_hull_threshold"
                    || opt_key == "voronoi_cloud_method"
+                   || opt_key == "infill_slice_slab_distances"
                    || opt_key == "infill_smoothing_sigma"
                    || opt_key == "adaptive_infill_mode"
                    || opt_key == "adaptive_infill_interior_density"

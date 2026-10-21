@@ -3812,6 +3812,13 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(-1.));
 
+    def = this->add("infill_slice_slab_distances", coBool);
+    def->label = L("Slice-slab infill distances");
+    def->category = L("Strength");
+    def->tooltip = L("For this object, compute three-dimensional wall distances from every sliced layer instead of voxel-plane samples. This preserves features between grid planes, but uses more memory and may take longer. Normal X/Y/Z profiles retain their planar voxel calculation. Disable to use the voxel backend.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("infill_smoothing_sigma", coFloat);
     def->label = L("Corner smoothing sigma");
     def->category = L("Strength");

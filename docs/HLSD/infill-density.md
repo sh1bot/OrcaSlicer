@@ -57,8 +57,8 @@ order without splitting the parent's infill into separate regions.
 
 ## Distance calculation
 
-Adaptive infill, corner reinforcement and fused material density share the
-object's adaptive voxel geometry. The existing raster and distance transform
+By default, adaptive infill, corner reinforcement and fused material density
+share the object's adaptive voxel geometry. The existing raster and distance transform
 supply interior distances. Consumers needing signed distances additionally
 transform the exterior, preserving the interior costs used by adaptive grading.
 Modifier blend masks use the same voxel calculation.
@@ -69,3 +69,24 @@ blend boundaries and corner reinforcement have this resolution limit too.
 When grid spacing approaches Gaussian sigma, smoothing becomes less accurate.
 Normal X/Y/Z measure within their sections; physical corner reinforcement uses
 three-dimensional distances. Density settings reuse the object's immutable grid.
+
+### Slice-slab backend
+
+The object-level **Slice-slab infill distances** checkbox selects an alternative
+3D distance calculation; it is off by default. Two height-ordered sweeps combine
+Orca's planar signed distances over every completed slice slab, including
+profiles and gaps between output grid planes. Identical adjacent profiles are
+merged. Only one planar field is retained during each sweep.
+
+This backend uses a 1 mm cubic grid, coarsening to at most 32 million nodes,
+and logarithmic distance bytes capped at 1000 mm. Construction temporarily
+retains one float per output node plus per-column distance envelopes. It can
+use substantially more memory and time than the voxel backend. Sampling and
+planar SDF interpolation remain approximate.
+
+Wall-depth grading, corner reinforcement, snapping and modifier blend masks use
+the selected backend. Normal X/Y/Z profiles retain their planar voxel transform;
+physical corner reinforcement still uses the selected 3D field. The selection
+belongs to the parent object, including its fused modifiers. Cached geometry,
+density tables and point clouds distinguish the backends so either can be
+selected without reusing results from the other.

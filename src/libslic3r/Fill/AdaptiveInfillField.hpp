@@ -20,11 +20,12 @@
 
 namespace Slic3r {
 
-// Voxel distances used by adaptive infill. Signed sampling is negative inside.
+// Distances used by adaptive infill. Signed sampling is negative inside.
 // Slices must be ordered, non-overlapping, and their expolygons valid during construction.
 class AdaptiveInfillDistanceField {
 public:
     struct Slice { double bottom_z, top_z; const ExPolygons *expolygons; };
+    enum class Method { Voxel, SliceSlabs };
     enum class Stage { Distance, Encoding, Complete };
     using Progress = std::function<void(Stage, double)>;
     struct Interpolation {
@@ -36,20 +37,28 @@ public:
     AdaptiveInfillDistanceField() = default;
     explicit AdaptiveInfillDistanceField(const std::vector<Slice> &slices, const BoundingBox &bbox = {},
         const std::function<void()> &throw_if_canceled = {}, const Progress &progress = {},
-        bool signed_distances = false, int normal_axis = -1);
-    // With the flag off, exterior nodes remain zero and only the interior transform runs.
+        bool signed_distances = false, int normal_axis = -1, Method method = Method::Voxel);
+    Method method() const { return m_method; }
+    // Exterior samples are zero when disabled; the voxel backend also skips its exterior transform.
     bool has_signed_distances() const { return m_signed; }
     bool empty() const { return node_count() == 0; }
     double signed_distance(const Vec3d &point) const { return sample(interpolation(point)); }
     double grid_spacing() const { return spacing; }
     const Vec3d &grid_origin() const { return origin; }
     const std::array<size_t, 3> &grid_size() const { return size; }
-    size_t node_count() const { return original->squared.size(); }
-    // Exact existing voxel-transform costs, before physical-distance conversion.
-    float squared_depth(size_t index) const { return is_inside(index) ? original->squared[index] : 0.f; }
+    size_t node_count() const { return original->distance.empty() ? original->squared.size() : original->distance.size(); }
+    // Voxel-transform costs; slab distances are converted to the same grid units.
+    float squared_depth(size_t index) const {
+        if (!is_inside(index)) return 0.f;
+        return original->distance.empty() ? original->squared[index] :
+            float(std::pow(decoded[original->distance[index]] / spacing + 0.5, 2));
+    }
     bool is_inside(size_t index) const { return original->inside[index / 8] & (uint8_t(1) << (index % 8)); }
     double node_value(size_t index) const {
-        const double d = std::min(far_distance, std::max(0., std::sqrt(double(original->squared[index])) - 0.5) * spacing);
+        if (!m_signed && !is_inside(index)) return 0.;
+        const double d = original->distance.empty() ?
+            std::min(far_distance, std::max(0., std::sqrt(double(original->squared[index])) - 0.5) * spacing) :
+            decoded[original->distance[index]];
         return is_inside(index) ? -d : d;
     }
     // Reuse the same interpolation weights for fields built on this grid.
@@ -57,11 +66,16 @@ public:
     double sample(const Interpolation &where) const;
     std::vector<double> sample(const std::vector<Vec3d> &points) const;
 private:
+    void build_slice_slabs(const std::vector<Slice> &slices, const BoundingBox &bbox,
+        const std::function<void()> &throw_if_canceled, const Progress &progress);
+    static constexpr double distance_scale = 6.;
+    Method m_method = Method::Voxel;
+    std::array<double, 256> decoded {};
     bool m_signed = false;
     double spacing = 1.;
     Vec3d origin = Vec3d::Zero();
     std::array<size_t, 3> size {{0, 0, 0}};
-    struct Field { std::vector<uint8_t> inside; std::vector<float> squared; };
+    struct Field { std::vector<uint8_t> inside, distance; std::vector<float> squared; };
     std::shared_ptr<Field> original = std::make_shared<Field>();
 };
 
