@@ -4,6 +4,7 @@
 #include "InfillDensityField.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "Config.hpp"
+#include "VoronoiCloudMethod.hpp"
 #include "Model.hpp"
 #include "Polygon.hpp"
 #include "Fill/FillBase.hpp"
