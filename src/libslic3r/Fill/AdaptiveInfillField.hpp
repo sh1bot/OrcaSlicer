@@ -173,6 +173,8 @@ struct AdaptiveTpms
     double               surface_frequency;
     double               interior_frequency;
     AdaptiveInfillGradient gradient;
+    // Optional material-density consumer, returning radians per mm in object coordinates.
+    std::function<double(const Vec3d &)> frequency_at;
 };
 
 // Infill lines in the fill frame, the object frame rotated by -angle; z is the print_z of the layer.

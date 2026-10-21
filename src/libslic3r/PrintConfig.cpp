@@ -1,4 +1,5 @@
 #include "PrintConfig.hpp"
+#include "InfillDensityField.hpp"
 #include "CommonDefs.hpp"
 #include "Point.hpp"
 #include "Polygon.hpp"
@@ -3750,6 +3751,16 @@ void PrintConfigDef::init_fff_params()
                         "buckling resistance. Filament use is preserved. No effect at ~30% sparse infill "
                         "density and above. Only applies when Sparse infill pattern is set to Gyroid.");
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("infill_smoothing_sigma", coFloat);
+    def->label = L("Corner smoothing sigma");
+    def->category = L("Strength");
+    def->tooltip = L("Gaussian standard deviation for the wall-distance field. Larger values extend the corner density boost over a wider area. Zero disables smoothing. The filter extends to three times this distance.");
+    def->sidetext = L("mm");
+    def->min = 0.;
+    def->max = InfillDensityField::maximum_smoothing_sigma;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
 
     def = this->add("sparse_infill_pattern", coEnum);
     def->label = L("Sparse infill pattern");
@@ -9663,6 +9674,7 @@ void PrintConfigDef::init_sla_params()
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
 {
 
+    if (opt_key == "voronoi_smoothing_sigma") opt_key = "infill_smoothing_sigma";
     //BBS: handle legacy options
     if (opt_key == "curr_bed_type" && value == "SuperTack Plate") {
         value = "Supertack Plate";

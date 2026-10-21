@@ -747,7 +747,7 @@ TEST_CASE("Voronoi preserves the selected adaptive spatial mode", "[PrintObject]
     const std::string mode = GENERATE("disabled", "distance_warp", "smooth_blend", "stepped_shells", "lobes", "normal_z", "normal_y", "normal_x");
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"sparse_infill_pattern", "voronoi"}, {"sparse_infill_density", "15%"},
-        {"adaptive_infill_mode", mode}, {"adaptive_infill_interior_density", "5%"}});
+        {"adaptive_infill_mode", mode}, {"adaptive_infill_interior_density", "5%"}, {"infill_smoothing_sigma", "0"}});
     Print print;
     Model model;
     init_print({cube(10)}, print, model, config);
@@ -755,4 +755,19 @@ TEST_CASE("Voronoi preserves the selected adaptive spatial mode", "[PrintObject]
     REQUIRE(settings.density.mode == config.opt_enum<AdaptiveInfillMode>("adaptive_infill_mode"));
     REQUIRE_THAT(settings.density.material_density, Catch::Matchers::WithinAbs(0.15, 1e-12));
     REQUIRE_THAT(settings.density.interior_density, Catch::Matchers::WithinAbs(0.05, 1e-12));
+}
+
+TEST_CASE("Only physical-distance infill features request exterior distances", "[PrintObject][Voronoi]")
+{
+    const auto [pattern, mode, sigma, needed] = GENERATE(table<std::string, std::string, double, bool>({
+        {"gyroid", "smooth_blend", 0., false}, {"gyroid", "smooth_blend", 4., true},
+        {"gyroid", "normal_z", 4., false}, {"voronoi", "disabled", 0., false},
+        {"voronoi", "disabled", 4., true}, {"voronoi", "smooth_blend", 0., true}}));
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", pattern}, {"adaptive_infill_mode", mode},
+        {"sparse_infill_density", "15%"}, {"infill_smoothing_sigma", sigma}});
+    Print print;
+    Model model;
+    init_print({cube(10)}, print, model, config);
+    REQUIRE(print.objects().front()->needs_signed_infill_distances() == needed);
 }

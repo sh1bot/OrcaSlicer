@@ -781,10 +781,23 @@ TEST_CASE("Voronoi finite empty clouds terminate without geometry", "[FillVorono
     REQUIRE(infill.fill_geometry(region.contour.bounding_box(), region, {0.45, 0.2, 0., 0.45, 0.}).walls.empty());
 }
 
+TEST_CASE("Voronoi wall distance favors walls and both corner signs", "[FillVoronoi]")
+{
+    using Cloud = Voronoi::WallDistancePointCloud;
+    REQUIRE(InfillDensityField::density_ratio(-1., -1., 32.) > InfillDensityField::density_ratio(-15., -15., 32.));
+    REQUIRE(InfillDensityField::density_ratio(-4., -3., 32.) > InfillDensityField::density_ratio(-4., -4., 32.));
+    REQUIRE(InfillDensityField::density_ratio(-4., -5., 32.) > InfillDensityField::density_ratio(-4., -4., 32.));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-1000., -1000., 32.), Catch::Matchers::WithinAbs(0.01, EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(0., 0., 32.), Catch::Matchers::WithinAbs(1., EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-6., -6., 32.), Catch::Matchers::WithinAbs(std::pow(0.01, 6. / 32.), EPSILON));
+    REQUIRE(InfillDensityField::density_ratio(-50., -50., 32.) < 0.02);
+    REQUIRE(InfillDensityField::density_ratio(-1000., -1000., 32.) > 0.);
+    REQUIRE_THAT(InfillDensityField::density_ratio(5., 5., 32.), Catch::Matchers::WithinAbs(1., EPSILON));
+}
 
 TEST_CASE("Voronoi wall thinning preserves reproducibility and site intensity", "[FillVoronoi]")
 {
-    auto constant = [](const std::vector<Vec3d> &points) { return std::vector<InfillDensitySample>(points.size(), {-6., adaptive_density_scale(0.01, AdaptiveInfillGradient::Exponential, 6. / 32.)}); };
+    auto constant = [](const std::vector<Vec3d> &points) { return std::vector<InfillDensitySample>(points.size(), {-6., InfillDensityField::density_ratio(-6., -6., 32.)}); };
     Voronoi::PoissonPointCloud uniform;
     Voronoi::WallDistancePointCloud thinned(constant);
     const BoundingBoxf3 box(Vec3d(-20., -20., -20.), Vec3d(20., 20., 20.));
@@ -793,11 +806,11 @@ TEST_CASE("Voronoi wall thinning preserves reproducibility and site intensity", 
         for (const Vec3d &p : points) REQUIRE(result.insert({p.x(), p.y(), p.z()}).second);
         return result;
     };
-    const double maximum_ratio = 1.;
+    const double maximum_ratio = InfillDensityField::density_ratio(0., 2., 32.);
     const auto source = keys(uniform.points_in(box, 1. / maximum_ratio));
     const auto expected = keys(thinned.points_in(box, 1.));
     REQUIRE_FALSE(expected.empty());
-    REQUIRE_THAT(double(expected.size()) / source.size(), Catch::Matchers::WithinRel(std::pow(adaptive_density_scale(0.01, AdaptiveInfillGradient::Exponential, 6. / 32.) / maximum_ratio, 3), 0.15));
+    REQUIRE_THAT(double(expected.size()) / source.size(), Catch::Matchers::WithinRel(std::pow(InfillDensityField::density_ratio(-6., -6., 32.) / maximum_ratio, 3), 0.15));
     for (const auto &point : expected) REQUIRE(source.count(point) == 1);
     auto first = box, second = box;
     first.max.z() = second.min.z() = 0.37;
@@ -867,33 +880,158 @@ TEST_CASE("Voronoi cloud setup is reused across parallel layers and resets on re
     REQUIRE(regenerated->points_in(region, 4.) == points);
 }
 
+TEST_CASE("Voronoi Gaussian smoothing preserves flat-wall material density", "[FillVoronoi]")
+{
+    const ExPolygons outlines {rectangle(-30., -30., 30., 30.)};
+    InfillDensityField field({{0., 60., &outlines}}, 2.);
+    for (const auto &sample : field.sample_fields({Vec3d(0., 0., -2.), Vec3d(0., 0., 0.),
+                Vec3d(0., 0., 2.), Vec3d(0., 0., 6.), Vec3d(28., 0., 30.)}))
+        REQUIRE_THAT(sample.density, Catch::Matchers::WithinRel(
+            InfillDensityField::density_ratio(sample.distance, sample.distance, 30., 0.2, AdaptiveInfillGradient::Linear), 0.04));
+}
 
+TEST_CASE("Voronoi Gaussian smoothing increases density at convex and concave corners", "[FillVoronoi]")
+{
+    const ExPolygons outlines {rectangle(-20., -20., 20., 20.)};
+    InfillDensityField convex({{0., 40., &outlines}}, 2.);
+    const auto outer = convex.sample_fields({Vec3d(14., 14., 20.), Vec3d(14., 0., 20.),
+                                             Vec3d(14., 0., 34.), Vec3d(0., 14., 34.)});
+    using Cloud = Voronoi::WallDistancePointCloud;
+    REQUIRE(outer[0].density > outer[1].density);
+    REQUIRE_THAT(outer[1].density, Catch::Matchers::WithinRel(InfillDensityField::density_ratio(outer[1].distance, outer[1].distance, 20., 0.2, AdaptiveInfillGradient::Linear), 0.04));
+    REQUIRE_THAT(outer[2].density, Catch::Matchers::WithinRel(outer[0].density, 0.04));
+    REQUIRE_THAT(outer[3].density, Catch::Matchers::WithinRel(outer[0].density, 0.04));
+    ExPolygon hollow = rectangle(-30., -30., 30., 30.);
+    hollow.holes.push_back(rectangle(-10., -10., 10., 10.).contour);
+    hollow.holes.back().reverse();
+    const ExPolygons hole {hollow};
+    InfillDensityField concave({{0., 40., &hole}}, 2.);
+    const auto inner = concave.sample_fields({Vec3d(14., 14., 20.)}).front();
+    InfillDensityField unadjusted({{0., 40., &hole}}, 0.);
+    REQUIRE(inner.density > unadjusted.sample_fields({Vec3d(14., 14., 20.)}).front().density);
+}
 
+TEST_CASE("Voronoi separable smoothing matches a three dimensional Gaussian", "[FillVoronoi]")
+{
+    const ExPolygons outlines {rectangle(-20., -20., 20., 20.)};
+    InfillDensityField field({{0., 40., &outlines}}, 2.);
+    const Vec3d center(14., 14., 34.);
+    std::vector<Vec3d> points;
+    std::vector<double> weights;
+    for (int x = -6; x <= 6; ++x)
+        for (int y = -6; y <= 6; ++y)
+            for (int z = -6; z <= 6; ++z) {
+                points.push_back(center + Vec3d(x, y, z));
+                weights.push_back(std::exp(-(x * x + y * y + z * z) / 8.));
+            }
+    const auto distances = field.sample(points);
+    double expected = 0., weight_sum = 0.;
+    for (size_t i = 0; i < distances.size(); ++i) {
+        expected += weights[i] * distances[i];
+        weight_sum += weights[i];
+    }
+    REQUIRE_THAT(field.sample_fields({center}).front().density,
+                 Catch::Matchers::WithinRel(InfillDensityField::density_ratio(field.sample({center}).front(), expected / weight_sum, 20., 0.2, AdaptiveInfillGradient::Linear), 0.04));
+}
 
+TEST_CASE("Voronoi Gaussian smoothing remains planar when its radius exceeds the halo", "[FillVoronoi]")
+{
+    const ExPolygons outlines {rectangle(-50., -50., 50., 50.)};
+    InfillDensityField field({{0., 100., &outlines}}, 8.);
+    const auto samples = field.sample_fields({Vec3d(0., 0., -2.), Vec3d(0., 0., 0.),
+                                               Vec3d(0., 0., 4.), Vec3d(46., 0., 50.)});
+    for (const auto &sample : samples)
+        REQUIRE_THAT(sample.density, Catch::Matchers::WithinRel(InfillDensityField::density_ratio(sample.distance, sample.distance, 50., 0.2, AdaptiveInfillGradient::Linear), 0.06));
+}
 
+TEST_CASE("Voronoi Gaussian smoothing accepts zero width and rejects invalid widths", "[FillVoronoi]")
+{
+    const ExPolygons outlines {rectangle(-10., -10., 10., 10.)};
+    InfillDensityField field({{0., 20., &outlines}}, 0.);
+    const AdaptiveInfillField reference({{0., 20., &outlines}}, get_extents(outlines), AdaptiveInfillMode::SmoothBlend, [] {});
+    for (const Vec3d &point : {Vec3d(0., 0., 10.), Vec3d(0., 0., -1.), Vec3d(9.5, 0., 10.)})
+        REQUIRE_THAT(field.sample_fields({point}).front().density,
+            Catch::Matchers::WithinRel(adaptive_density_scale(0.2, AdaptiveInfillGradient::Linear, reference.depth(point)), 0.025));
+    REQUIRE_THROWS_AS(InfillDensityField({{0., 20., &outlines}}, -1.), std::invalid_argument);
+    REQUIRE_THROWS_AS(InfillDensityField({{0., 20., &outlines}}, InfillDensityField::maximum_smoothing_sigma + 1.), std::invalid_argument);
+    REQUIRE_THROWS_AS(InfillDensityField({{0., 20., &outlines}}, std::numeric_limits<double>::quiet_NaN()), std::invalid_argument);
+}
 
 TEST_CASE("Voronoi thinning samples prepared material density once per candidate", "[FillVoronoi]")
 {
     size_t queried = 0;
     Voronoi::WallDistancePointCloud cloud([&](const auto &points) {
         queried += points.size();
-        return std::vector<InfillDensitySample>(points.size(), {-6., 0.5});
+        return std::vector<InfillDensitySample>(points.size(), {-6., InfillDensityField::density_ratio(-6., -5., 32.)});
     });
     const BoundingBoxf3 box(Vec3d(-10., -10., -10.), Vec3d(10., 10., 10.));
-    const auto candidates = Voronoi::PoissonPointCloud().points_in(box, 3. / 1.);
+    const auto candidates = Voronoi::PoissonPointCloud().points_in(box, 3. / InfillDensityField::density_ratio(0., 2., 32.));
     cloud.points_in(box, 3.);
     REQUIRE(queried == candidates.size());
 }
 
+TEST_CASE("Voronoi gradients retain surface and interior targets", "[FillVoronoi]")
+{
+    using Cloud = Voronoi::WallDistancePointCloud;
+    REQUIRE_THAT(InfillDensityField::density_ratio(2., 2., 32.), Catch::Matchers::WithinAbs(1., EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-2., -2., 32.), Catch::Matchers::WithinAbs(std::pow(0.01, 2. / 32.), EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-32., -32., 32.), Catch::Matchers::WithinAbs(0.01, EPSILON));
+    REQUIRE(InfillDensityField::density_ratio(-8., -8., 32.) > InfillDensityField::density_ratio(-16., -16., 32.));
+}
 
+TEST_CASE("Voronoi corners boost density above the setting without boosting flat walls", "[FillVoronoi]")
+{
+    using Cloud = Voronoi::WallDistancePointCloud;
+    for (double distance : {0., 1., 2., -1., -2.})
+        REQUIRE_THAT(InfillDensityField::density_ratio(distance, distance, 32.), Catch::Matchers::WithinAbs(std::pow(0.01, std::max(0., -distance) / 32.), EPSILON));
+    const double maximum = 0.01 + 0.99 * std::exp(2. / 6.);
+    REQUIRE_THAT(InfillDensityField::density_ratio(-2., -1., 32.), Catch::Matchers::WithinAbs(std::pow(0.01, 1. / 32.) + 0.99 * std::expm1(1. / 6.), EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-2., -3., 32.), Catch::Matchers::WithinAbs(InfillDensityField::density_ratio(-2., -1., 32.), EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-1., -20., 32.), Catch::Matchers::WithinAbs(maximum, EPSILON));
 
+    const BoundingBoxf3 box(Vec3d(-20., -20., -20.), Vec3d(20., 20., 20.));
+    const auto uniform = Voronoi::PoissonPointCloud().points_in(box, 2.);
+    auto count = [&](InfillDensitySample sample) {
+        Cloud cloud([sample](const auto &points) { return std::vector<InfillDensitySample>(points.size(), sample); });
+        return double(cloud.points_in(box, 2.).size()) / uniform.size();
+    };
+    REQUIRE_THAT(count({-1., 1.}), Catch::Matchers::WithinRel(1., 0.1));
+    REQUIRE_THAT(count({-2., InfillDensityField::density_ratio(-2., -1., 32.)}), Catch::Matchers::WithinRel(std::pow(InfillDensityField::density_ratio(-2., -1., 32.), 3), 0.1));
+    REQUIRE_THAT(count({-1., maximum}), Catch::Matchers::WithinRel(std::pow(maximum, 3), 0.1));
+}
+
+TEST_CASE("Uniform Voronoi density retains corner boosts", "[FillVoronoi]")
+{
+    using Cloud = Voronoi::WallDistancePointCloud;
+    for (double depth : {0., 2., 12., 1000.}) {
+        REQUIRE_THAT(InfillDensityField::density_ratio(-depth, -depth, 0.), Catch::Matchers::WithinAbs(1., EPSILON));
+        REQUIRE(InfillDensityField::density_ratio(-depth, -depth + 1., 0.) > 1.);
+    }
+    REQUIRE(InfillDensityField::density_ratio(-12., -12., 64.) > InfillDensityField::density_ratio(-12., -12., 32.));
+    const ExPolygons outlines {rectangle(-10., -10., 10., 10.)};
+    Voronoi::WallDistanceCloudCache cache;
+    size_t loads = 0;
+    const auto slices = [&] { ++loads; return std::vector<WallSlice>{{0., 20., &outlines}}; };
+    const auto plain = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, {});
+    const BoundingBoxf3 box(Vec3d(-5., -5., 0.), Vec3d(5., 5., 10.));
+    REQUIRE(plain->points_in(box, 2.) == Voronoi::PoissonPointCloud().points_in(box, 2.));
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, {}) == plain);
+    REQUIRE(loads == 0);
+    const auto graded = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, {});
+    REQUIRE(graded != plain);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, {}) == graded);
+    REQUIRE(loads == 1);
+    REQUIRE_THROWS_AS(Cloud({}, -1.), std::invalid_argument);
+}
 
 TEST_CASE("Voronoi distance construction reports progress through completion", "[FillVoronoi]")
 {
     const ExPolygons outlines{rectangle(0., 0., 20., 20.)};
+    const double sigma = GENERATE(0., 2.);
     auto previous_stage = WallDistanceStage::Distance;
     double previous_fraction = 0.;
-    InfillDensityField field({{0., 20., &outlines}},
+    bool saw_smoothing = false;
+    InfillDensityField field({{0., 20., &outlines}}, sigma,
         [&](WallDistanceStage stage, double fraction) {
             REQUIRE(int(stage) >= int(previous_stage));
             REQUIRE(fraction >= 0.);
@@ -901,23 +1039,53 @@ TEST_CASE("Voronoi distance construction reports progress through completion", "
             if (stage == previous_stage) REQUIRE(fraction >= previous_fraction);
             previous_stage = stage;
             previous_fraction = fraction;
+            if (stage == WallDistanceStage::SmoothXY || stage == WallDistanceStage::SmoothZ)
+                saw_smoothing = true;
         });
     REQUIRE(previous_stage == WallDistanceStage::Complete);
     REQUIRE_THAT(previous_fraction, Catch::Matchers::WithinAbs(1., 1e-12));
+    REQUIRE(saw_smoothing == (sigma > 0.));
     REQUIRE(field.sample({Vec3d(10., 10., 10.)}).front() < 0.);
 }
+
+TEST_CASE("Canceled Voronoi smoothing leaves the cache usable", "[FillVoronoi]")
+{
+    const ExPolygons outlines{rectangle(0., 0., 20., 20.)};
+    Voronoi::WallDistanceCloudCache cache;
+    const auto slices = [&] { return std::vector<WallSlice>{{0., 20., &outlines}}; };
+    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, [](WallDistanceStage stage, double) {
+            if (stage == WallDistanceStage::SmoothXY) throw std::runtime_error("cancel");
+        }), std::runtime_error);
+    bool completed = false;
+    const auto provider = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, [&](WallDistanceStage stage, double fraction) {
+            if (stage == WallDistanceStage::Complete && fraction == 1.) completed = true;
+        });
+    REQUIRE(completed);
+    REQUIRE(provider != nullptr);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, [](auto, double) { throw std::runtime_error("cached fields must not rebuild"); }) == provider);
+}
+
+
+
+
+
+
+
+
 
 
 TEST_CASE("The candidate density bound covers both sparse interiors and dense walls", "[FillVoronoi][MaterialDensity]")
 {
     const ExPolygons model {rectangle(-40., -40., 40., 40.)};
     const bool adaptive = true;
+    const double sigma = GENERATE(0., 8.);
     const double density = 0.3;
-    InfillDensityField field({{-40., 40., &model}}, {}, adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, density);
+    InfillDensityField field({{-40., 40., &model}}, sigma, {}, adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, density);
     std::vector<Vec3d> points;
     for (int x = 0; x <= 40; ++x) points.emplace_back(x, 0., 0.);
     const auto samples = field.sample_fields(points);
-    const double expected = 1.;
+    const double boost = InfillDensityField::density_ratio(0., sigma == 0. ? 0. : 2., 32.);
+    const double expected = boost;
     REQUIRE_THAT(field.maximum_density_ratio(), Catch::Matchers::WithinRel(expected, 1e-12));
     REQUIRE(samples.front().density < samples.back().density);
     for (const auto &sample : samples)
@@ -987,6 +1155,19 @@ TEST_CASE("Copied Voronoi networks own their storage through dimension changes",
 }
 
 
+TEST_CASE("Voronoi uses the shared adaptive density gradients over body-relative depth", "[FillVoronoi]")
+{
+    using Cloud = Voronoi::WallDistancePointCloud;
+    const auto gradient = GENERATE(AdaptiveInfillGradient::Linear, AdaptiveInfillGradient::Quadratic, AdaptiveInfillGradient::Exponential);
+    const double middle = gradient == AdaptiveInfillGradient::Linear ? 0.6 :
+        gradient == AdaptiveInfillGradient::Quadratic ? 0.8 : std::sqrt(0.2);
+    REQUIRE_THAT(InfillDensityField::density_ratio(0., 0., 40., 0.2, gradient), Catch::Matchers::WithinAbs(1., EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-20., -20., 40., 0.2, gradient), Catch::Matchers::WithinAbs(middle, EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-40., -40., 40., 0.2, gradient), Catch::Matchers::WithinAbs(0.2, EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-1000., -1000., 40., 0.2, gradient), Catch::Matchers::WithinAbs(0.2, EPSILON));
+    REQUIRE_THAT(InfillDensityField::density_ratio(-20., -20., 0., 0.2, gradient), Catch::Matchers::WithinAbs(1., EPSILON));
+    REQUIRE(InfillDensityField::density_ratio(-20., -18., 40., 2., gradient) >= InfillDensityField::density_ratio(-20., -20., 40., 2., gradient));
+}
 
 TEST_CASE("Voronoi prepared interior density is absolute and each connected body reaches it", "[FillVoronoi]")
 {
@@ -995,7 +1176,7 @@ TEST_CASE("Voronoi prepared interior density is absolute and each connected body
     const AdaptiveInfillField reference(slices, get_extents(model), AdaptiveInfillMode::SmoothBlend, [] {});
     const std::vector<Vec3d> points {Vec3d(-40., 0., 40.), Vec3d(20., 0., 40.)};
     for (double surface : {0.1, 0.25}) {
-        InfillDensityField field({{0., 80., &model}}, {}, AdaptiveInfillMode::SmoothBlend, surface);
+        InfillDensityField field({{0., 80., &model}}, 0., {}, AdaptiveInfillMode::SmoothBlend, surface);
         const auto values = field.sample_fields(points);
         for (size_t i = 0; i < points.size(); ++i) {
             const double depth = reference.depth(points[i]);
@@ -1006,11 +1187,11 @@ TEST_CASE("Voronoi prepared interior density is absolute and each connected body
     }
 }
 
-TEST_CASE("Voronoi material density follows TPMS depth when the model is scaled", "[FillVoronoi]")
+TEST_CASE("Voronoi unsmoothed material density follows TPMS depth when the model is scaled", "[FillVoronoi]")
 {
     for (double half : {10., 30.}) {
         const ExPolygons model {rectangle(-half, -half, half, half)};
-        InfillDensityField field({{0., 2. * half, &model}});
+        InfillDensityField field({{0., 2. * half, &model}}, 0.);
         const auto values = field.sample_fields({Vec3d(0., 0., 0.), Vec3d(0., 0., half / 2.), Vec3d(0., 0., half)});
         REQUIRE_THAT(values[0].density, Catch::Matchers::WithinRel(1., 0.04));
         REQUIRE_THAT(values[1].density, Catch::Matchers::WithinRel(0.6, 0.04));
