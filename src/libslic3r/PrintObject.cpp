@@ -1320,8 +1320,14 @@ AdaptiveInfillFields PrintObject::prepare_adaptive_infill_fields() const
     std::array<bool, size_t(AdaptiveInfillMode::Count)> modes{};
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
         if (const PrintRegionConfig &config = this->printing_region(region_id).config();
-            config.sparse_infill_pattern != ipVoronoi && config.sparse_infill_density > 0 && config.sparse_infill_density < 100 && is_adaptive_infill_pattern(config.sparse_infill_pattern))
-            modes[size_t(config.adaptive_infill_mode.value)] = true;
+            config.sparse_infill_density > 0 && config.sparse_infill_density < 100 && is_adaptive_infill_pattern(config.sparse_infill_pattern))
+        {
+            auto mode = config.adaptive_infill_mode.value;
+            if (config.sparse_infill_pattern == ipVoronoi &&
+                (mode == AdaptiveInfillMode::DistanceWarp || mode == AdaptiveInfillMode::SteppedShells))
+                mode = AdaptiveInfillMode::SmoothBlend;
+            modes[size_t(mode)] = true;
+        }
     modes[size_t(AdaptiveInfillMode::Disabled)] = false;
     if (std::find(modes.begin(), modes.end(), true) == modes.end() || m_layers.empty())
         return fields;

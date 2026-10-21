@@ -22,6 +22,8 @@ std::shared_ptr<const PointCloudProvider> WallDistanceCloudCache::get(const std:
         !std::isfinite(interior_density) || interior_density <= 0. || interior_density > 1.)
         throw std::invalid_argument("Invalid Voronoi distance settings");
     std::lock_guard<std::mutex> lock(m_mutex);
+    const auto cached = m_providers.find({mode, material_density, interior_density, gradient});
+    if (cached != m_providers.end() && cached->second) return cached->second;
     std::shared_ptr<const InfillDensityField> table;
     WallDistanceSamples sample;
     if (mode != AdaptiveInfillMode::Disabled) {

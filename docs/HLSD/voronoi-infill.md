@@ -71,3 +71,5 @@ Layer completion reports throttled progress and checks cancellation.
 The [shared material-density field](infill-density.md) grades point density by
 wall depth or lobe/section profiles when Adaptive density is enabled. Disabled
 gives a uniform cloud without preparing a distance field.
+
+Adaptive point selection reuses the object’s prepared spatial profile. A provider owns its density evaluator; direct profile evaluation has no separate result cache.

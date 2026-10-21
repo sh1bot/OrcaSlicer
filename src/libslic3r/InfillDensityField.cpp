@@ -141,14 +141,11 @@ std::shared_ptr<const AdaptiveInfillField> InfillDensityCache::geometry(
             std::lock_guard<std::mutex> guard(progress_mutex);
             report(progress, stage, fraction);
         };
-        auto &distances = m_distances[{axis, signed_distances}];
-        if (!distances) {
-            const auto distance_progress = [&](AdaptiveInfillDistanceField::Stage stage, double fraction) {
-                if (stage == AdaptiveInfillDistanceField::Stage::Distance) notify(WallDistanceStage::Distance, fraction);
-                else if (stage == AdaptiveInfillDistanceField::Stage::Encoding) notify(WallDistanceStage::Encoding, fraction / 2.);
-            };
-            distances = std::make_shared<AdaptiveInfillDistanceField>(slices, bbox, cancel, distance_progress, signed_distances, axis);
-        }
+        const auto distance_progress = [&](AdaptiveInfillDistanceField::Stage stage, double fraction) {
+            if (stage == AdaptiveInfillDistanceField::Stage::Distance) notify(WallDistanceStage::Distance, fraction);
+            else if (stage == AdaptiveInfillDistanceField::Stage::Encoding) notify(WallDistanceStage::Encoding, fraction / 2.);
+        };
+        auto distances = std::make_shared<AdaptiveInfillDistanceField>(slices, bbox, cancel, distance_progress, signed_distances, axis);
         notify(WallDistanceStage::Encoding, 0.5);
         field = std::make_shared<AdaptiveInfillField>(slices, bbox, mode, cancel, distances);
     }
@@ -160,20 +157,14 @@ std::shared_ptr<const InfillDensityField> InfillDensityCache::get(
     const WallDistanceProgress &progress)
 {
     auto shapes = density_geometry(*this, load_slices, s.mode, progress);
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto &field = m_fields[{s.mode, s.material_density, s.interior_density, s.gradient}];
-    if (!field)
-        field = std::make_shared<InfillDensityField>(std::vector<WallSlice>{}, progress,
-            s.mode, s.material_density, s.interior_density, s.gradient, std::move(shapes));
-    return field;
+    return std::make_shared<InfillDensityField>(std::vector<WallSlice>{}, progress,
+        s.mode, s.material_density, s.interior_density, s.gradient, std::move(shapes));
 }
 
 void InfillDensityCache::clear()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_fields.clear();
     m_geometry.clear();
-    m_distances.clear();
 }
 
 } // namespace Slic3r
