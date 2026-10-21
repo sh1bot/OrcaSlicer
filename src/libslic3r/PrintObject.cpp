@@ -1314,9 +1314,11 @@ FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
     return has_lightning_infill ? FillLightning::build_generator(std::as_const(*this), [this]() -> void { this->throw_if_canceled(); }) : FillLightning::GeneratorPtr();
 }
 
-AdaptiveInfillFields PrintObject::prepare_adaptive_infill_fields() const
+const AdaptiveInfillFields &PrintObject::prepare_adaptive_infill_fields() const
 {
-    AdaptiveInfillFields fields;
+    const bool signed_distances = false;
+    auto &cache = m_voronoi_cloud_cache.density_fields();
+    const auto &fields = cache.profiles(signed_distances);
     std::array<bool, size_t(AdaptiveInfillMode::Count)> modes{};
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
         if (const PrintRegionConfig &config = this->printing_region(region_id).config();
@@ -1337,12 +1339,9 @@ AdaptiveInfillFields PrintObject::prepare_adaptive_infill_fields() const
         for (const Layer *layer : m_layers) slices.push_back({layer->bottom_z(), layer->print_z, &layer->lslices});
         return slices;
     };
-    const bool signed_distances = false;
     for (size_t mode = 0; mode < modes.size(); ++mode) {
         if (!modes[mode]) continue;
-        const auto field = m_voronoi_cloud_cache.density_fields().geometry(load_slices, AdaptiveInfillMode(mode),
-            signed_distances, infill_preparation_progress());
-        if (!field->empty() || AdaptiveInfillMode(mode) == AdaptiveInfillMode::SmoothBlend) fields[mode] = field;
+        cache.geometry(load_slices, AdaptiveInfillMode(mode), signed_distances, infill_preparation_progress());
     }
     return fields;
 }
@@ -3421,7 +3420,7 @@ void PrintObject::bridge_over_infill()
         }
 
         this->m_adaptive_fill_octrees = this->prepare_adaptive_infill_data(surfaces_w_layer);
-        this->m_adaptive_infill_fields    = this->prepare_adaptive_infill_fields();
+        this->m_adaptive_infill_fields    = &this->prepare_adaptive_infill_fields();
 
         std::vector<size_t> layers_to_generate_infill;
         for (const auto &pair : surfaces_by_layer) {
