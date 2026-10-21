@@ -19,6 +19,7 @@
 #include <cstddef>
 #include "libslic3r/Config.hpp"
 #include <functional>
+#include <set>
 #include "slic3r/GUI/Field.hpp"
 #include <boost/any.hpp>
 #include <string>
@@ -38,6 +39,7 @@
 
 #include <map>
 #include <vector>
+#include <set>
 #include <memory>
 
 //#include "BedShapeDialog.hpp"
@@ -559,6 +561,9 @@ public:
 	void set_model_config(std::map<ObjectBase *, ModelConfig *> const & object_configs);
 
 	bool has_model_config() const { return !m_object_configs.empty(); }
+    bool modifiers_have_density_field_parent() const;
+    bool has_fused_modifiers() const;
+    void toggle_fusion_controls(bool enable);
 
 	void update_model_config();
 
@@ -567,6 +572,8 @@ public:
 	bool has_key(std::string const &key);
 
 protected:
+    std::set<const ObjectBase *> modifier_configs() const;
+
 	virtual void    activate_selected_page(std::function<void()> throw_if_canceled) override;
 
 	virtual void    on_value_change(const std::string& opt_key, const boost::any& value) override;
@@ -579,6 +586,7 @@ protected:
 
 protected:
 	std::vector<std::string> m_keys;
+    bool m_fusion_controls_disabled = false;
 	PresetCollection m_prints;
 	Tab * m_parent_tab;
 	std::map<ObjectBase *, ModelConfig *> m_object_configs;

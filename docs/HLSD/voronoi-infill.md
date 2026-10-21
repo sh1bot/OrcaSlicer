@@ -73,6 +73,10 @@ depth or lobe/section profiles when Adaptive density is enabled, and independent
 corners when smoothing is enabled. The defaults (Disabled and zero smoothing)
 give a uniform cloud without preparing a distance field.
 
+Fused modifiers change this field without splitting the point cloud. Candidate
+bounds include every participating density, interior target and corner boost.
+The parent retains its point distribution, extrusion and geometry settings.
+
 Adaptive point selection reuses the object’s prepared spatial profile. A provider owns its density evaluator; direct profile evaluation has no separate result cache. Gaussian smoothing and modifier compositing cache their prepared buffers.
 
 The object and density evaluators share the same prepared adaptive profile arrays. The object borrows its selected array; clearing the density fields also clears those entries.

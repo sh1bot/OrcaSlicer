@@ -4,6 +4,7 @@
 #include "DeviceCore/DevConfigUtil.h"
 #include "format.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/InfillDensityModifier.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/MaterialType.hpp"
@@ -847,7 +848,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     bool have_adaptive_infill_pattern = have_infill && config->option<ConfigOptionPercent>("sparse_infill_density")->value < 100 &&
                             is_adaptive_infill_pattern(pattern);
     const bool voronoi_infill = have_infill && pattern == ipVoronoi;
-    const bool shared_density_infill = voronoi_infill;
+    const bool shared_density_infill = voronoi_infill || (!is_global_config && fused_density_modifier(*config));
     toggle_line("adaptive_infill_mode", have_adaptive_infill_pattern || shared_density_infill);
     bool have_adaptive_infill_mode = have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
     const bool shared_density_adaptive = shared_density_infill && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;

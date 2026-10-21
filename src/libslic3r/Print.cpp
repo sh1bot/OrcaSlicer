@@ -58,6 +58,7 @@
 #include "IMEXHelpers.hpp"
 #include "IMEXZones.hpp"
 #include "Print.hpp"
+#include "InfillDensityModifier.hpp"
 #include "BoundingBox.hpp"
 #include "Brim.hpp"
 #include "ClipperUtils.hpp"
@@ -1872,6 +1873,25 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         w.object  = object;
         add_warning(std::move(w));
     };
+
+    for (const PrintObject *object : m_objects)
+        for (const ModelVolume *volume : object->model_object()->volumes)
+            if (volume->is_modifier())
+                if (!Slic3r::valid_density_modifier_blend(volume->config.get()))
+                    return {_u8L("Material density blend width must be finite."), volume, "infill_modifier_blend"};
+
+    for (const PrintObject *object : m_objects)
+        for (const auto &range : object->shared_regions()->layer_ranges)
+            for (size_t i = 0; i < range.volume_regions.size(); ++i) {
+                const auto *volume = range.volume_regions[i].model_volume;
+                if (!volume->is_modifier() || !Slic3r::fused_density_modifier(volume->config.get())) continue;
+                const int parent = range.density_modifier_parent(int(i));
+                if (parent < 0 || !range.volume_regions[parent].region)
+                    return {_u8L("A fused density modifier requires a printable parent."), volume, "infill_modifier_blend"};
+                const auto &config = range.volume_regions[parent].region->config();
+                if (!supports_density_field(config.sparse_infill_pattern.value, config.adaptive_infill_mode.value, config.sparse_infill_density.value))
+                    return {_u8L("A fused density modifier requires nonzero Voronoi infill or Smooth blend TPMS/Gyroid infill below 100 percent in its parent."), volume, "infill_modifier_blend"};
+            }
 
     std::vector<unsigned int> extruders = this->extruders();
     unsigned int nozzles = m_config.nozzle_diameter.size();

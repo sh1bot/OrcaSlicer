@@ -3752,6 +3752,15 @@ void PrintConfigDef::init_fff_params()
                         "density and above. Only applies when Sparse infill pattern is set to Gyroid.");
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("infill_modifier_blend", coFloat);
+    def->label = L("Material density blend width");
+    def->category = L("Strength");
+    def->tooltip = L("For material-density modifiers: -1 keeps Orca's separate infill regions. Zero merges material density into the parent's infill density field. A positive width blends smoothly inside the modifier, reaching its density at this depth. Only surface and interior density, gradient, blend width and corner smoothing apply while fusion is enabled; other overrides are inactive and are restored when the width returns to -1. The parent's infill pattern, multiline and other settings are retained. High Voronoi material density can require substantial memory; consider Fill Multiline for thicker walls with fewer cells.");
+    def->sidetext = L("mm");
+    def->min = -1.;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(-1.));
+
     def = this->add("infill_smoothing_sigma", coFloat);
     def->label = L("Corner smoothing sigma");
     def->category = L("Strength");
@@ -9675,6 +9684,7 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
 {
 
     if (opt_key == "voronoi_smoothing_sigma") opt_key = "infill_smoothing_sigma";
+    if (opt_key == "voronoi_modifier_blend") opt_key = "infill_modifier_blend";
     //BBS: handle legacy options
     if (opt_key == "curr_bed_type" && value == "SuperTack Plate") {
         value = "Supertack Plate";

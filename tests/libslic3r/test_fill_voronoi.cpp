@@ -20,6 +20,7 @@
 #include "libslic3r/Fill/VoronoiRouting.hpp"
 #include "libslic3r/Fill/VoronoiWallDistance.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
+#include "libslic3r/InfillMaterialDensity.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/EdgeGrid.hpp"
 #include <atomic>
@@ -1012,14 +1013,14 @@ TEST_CASE("Uniform Voronoi density retains corner boosts", "[FillVoronoi]")
     Voronoi::WallDistanceCloudCache cache;
     size_t loads = 0;
     const auto slices = [&] { ++loads; return std::vector<WallSlice>{{0., 20., &outlines}}; };
-    const auto plain = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, {});
+    const auto plain = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., -1}, {}, {});
     const BoundingBoxf3 box(Vec3d(-5., -5., 0.), Vec3d(5., 5., 10.));
     REQUIRE(plain->points_in(box, 2.) == Voronoi::PoissonPointCloud().points_in(box, 2.));
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, {}) == plain);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., -1}, {}, {}) == plain);
     REQUIRE(loads == 0);
-    const auto graded = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, {});
+    const auto graded = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., -1}, {}, {});
     REQUIRE(graded != plain);
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, {}) == graded);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., -1}, {}, {}) == graded);
     REQUIRE(loads == 1);
     REQUIRE_THROWS_AS(Cloud({}, -1.), std::invalid_argument);
 }
@@ -1053,16 +1054,16 @@ TEST_CASE("Canceled Voronoi smoothing leaves the cache usable", "[FillVoronoi]")
     const ExPolygons outlines{rectangle(0., 0., 20., 20.)};
     Voronoi::WallDistanceCloudCache cache;
     const auto slices = [&] { return std::vector<WallSlice>{{0., 20., &outlines}}; };
-    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, [](WallDistanceStage stage, double) {
+    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., -1}, [](WallDistanceStage stage, double) {
             if (stage == WallDistanceStage::SmoothXY) throw std::runtime_error("cancel");
-        }), std::runtime_error);
+        }, {}), std::runtime_error);
     bool completed = false;
-    const auto provider = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, [&](WallDistanceStage stage, double fraction) {
+    const auto provider = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., -1}, [&](WallDistanceStage stage, double fraction) {
             if (stage == WallDistanceStage::Complete && fraction == 1.) completed = true;
-        });
+        }, {});
     REQUIRE(completed);
     REQUIRE(provider != nullptr);
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0.}, [](auto, double) { throw std::runtime_error("cached fields must not rebuild"); }) == provider);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., -1}, [](auto, double) { throw std::runtime_error("cached fields must not rebuild"); }, {}) == provider);
 }
 
 
@@ -1092,10 +1093,99 @@ TEST_CASE("The candidate density bound covers both sparse interiors and dense wa
         REQUIRE(field.maximum_density_ratio() >= sample.density - 1e-12);
 }
 
+TEST_CASE("Fused material density uses an inside-only smoothstep including modifier ceilings", "[FillVoronoi][MaterialDensity]")
+{
+    const ExPolygons model {rectangle(-20., -20., 20., 20.)};
+    DensityModifier modifier {3, 0.5, 4., {{8., 32., {rectangle(0., -20., 20., 20.)}}}};
+    modifier.interior_density = modifier.material_density;
+    InfillDensityField field({{0., 40., &model}}, 0., {}, AdaptiveInfillMode::Disabled, 0.1, {modifier}, 3);
+    for (double depth : {-2., 0., 1., 2., 3., 4., 8.}) {
+        const double t = std::clamp(depth / 4., 0., 1.);
+        const double expected = 0.1 + 0.4 * t * t * (3. - 2. * t);
+        const auto samples = field.sample_fields({Vec3d(depth, 0., 20.), Vec3d(10., 0., 8. + depth)});
+        // Allow for the planar boundary and interpolation error in the blend mask.
+        const double tolerance = 1.5 * 0.4 * 0.5 * field.grid_spacing() / 4. + 0.025 * 0.5;
+        for (const auto &sample : samples)
+            REQUIRE_THAT(0.1 * sample.density, Catch::Matchers::WithinAbs(expected, tolerance));
+    }
+    REQUIRE(field.maximum_density_ratio() >= 5.);
+    InfillDensityField other_region({{0., 40., &model}}, 0., {}, AdaptiveInfillMode::Disabled, 0.1, {modifier}, 7);
+    REQUIRE_THAT(other_region.sample_fields({Vec3d(10., 0., 20.)}).front().density,
+                 Catch::Matchers::WithinRel(1., 0.022));
+}
 
+TEST_CASE("Fused modifiers compose material density in order", "[FillVoronoi][MaterialDensity]")
+{
+    const ExPolygons model {rectangle(-20., -20., 20., 20.)};
+    DensityModifier first {3, 0.5, 0., {{0., 40., {rectangle(0., -20., 20., 20.)}}}};
+    first.interior_density = first.material_density;
+    auto second = first;
+    second.material_density = 0.2;
+    second.interior_density = second.material_density;
+    InfillDensityField ordered({{0., 40., &model}}, 0., {}, AdaptiveInfillMode::Disabled, 0.1, {first, second}, 3);
+    const auto sample = ordered.sample_fields({Vec3d(10., 0., 20.)}).front();
+    REQUIRE_THAT(sample.density * 0.1, Catch::Matchers::WithinRel(0.2, 0.022));
+    first.blend_width = second.blend_width = 4.;
+    InfillDensityField blended({{0., 40., &model}}, 0., {}, AdaptiveInfillMode::Disabled, 0.1, {first, second}, 3);
+    InfillDensityField first_only({{0., 40., &model}}, 0., {}, AdaptiveInfillMode::Disabled, 0.1, {first}, 3);
+    const Vec3d point(2., 0., 20.);
+    const double first_value = first_only.density(point);
+    const double blend = (first_value - 0.1) / (first.material_density - 0.1);
+    const double expected = first_value * (1. - blend) + second.material_density * blend;
+    REQUIRE_THAT(blended.density(point), Catch::Matchers::WithinRel(expected, 0.05));
+}
 
+TEST_CASE("Fused point clouds accommodate higher modifier density and empty interiors", "[FillVoronoi][MaterialDensity]")
+{
+    const double target = GENERATE(0., 0.5);
+    const ExPolygons model {rectangle(-20., -20., 20., 20.)};
+    DensityModifier modifier {3, target, 0., {{0., 40., {rectangle(0., -20., 20., 20.)}}}};
+    if (target > 0.) modifier.interior_density = target;
+    Voronoi::WallDistanceCloudCache cache;
+    const auto slices = [&] { return std::vector<WallSlice>{{0., 40., &model}}; };
+    const auto field = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.1, 0.05, AdaptiveInfillGradient::Linear}, 0., 3}, {}, {modifier});
+    const BoundingBoxf3 box(Vec3d(4., -5., 15.), Vec3d(14., 5., 25.));
+    const auto points = field->points_in(box, 3.);
+    if (target == 0.) REQUIRE(points.empty());
+    else {
+        const auto uniform = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., -1}, {}, {})->points_in(box, 3.);
+        REQUIRE(points.size() > 50 * uniform.size());
+    }
+    const auto left = field->points_in(BoundingBoxf3(box.min, Vec3d(9., 5., 25.)), 3.);
+    const auto right = field->points_in(BoundingBoxf3(Vec3d(9., -5., 15.), box.max), 3.);
+    REQUIRE(left.size() + right.size() == points.size());
+}
 
+TEST_CASE("Modifier blend weights use smoothstep entirely inside the boundary", "[FillVoronoi][MaterialDensity]")
+{
+    REQUIRE_THAT(Slic3r::modifier_blend(-1., 4.), Catch::Matchers::WithinAbs(0., EPSILON));
+    REQUIRE_THAT(Slic3r::modifier_blend(0., 4.), Catch::Matchers::WithinAbs(0., EPSILON));
+    REQUIRE_THAT(Slic3r::modifier_blend(1., 4.), Catch::Matchers::WithinAbs(0.15625, EPSILON));
+    REQUIRE_THAT(Slic3r::modifier_blend(2., 4.), Catch::Matchers::WithinAbs(0.5, EPSILON));
+    REQUIRE_THAT(Slic3r::modifier_blend(3., 4.), Catch::Matchers::WithinAbs(0.84375, EPSILON));
+    REQUIRE_THAT(Slic3r::modifier_blend(4., 4.), Catch::Matchers::WithinAbs(1., EPSILON));
+    REQUIRE_THAT(Slic3r::modifier_blend(8., 4.), Catch::Matchers::WithinAbs(1., EPSILON));
+    REQUIRE_THAT(Slic3r::modifier_blend(0., 0.), Catch::Matchers::WithinAbs(1., EPSILON));
+}
 
+TEST_CASE("Fused modifiers control interior density and corner smoothing", "[FillVoronoi][MaterialDensity]")
+{
+    const double parent_sigma = GENERATE(0., 8.);
+    const ExPolygons model {rectangle(-20., -20., 20., 20.)};
+    DensityModifier modifier {3, 0.1, 0., {{0., 40., model}}};
+    modifier.interior_density = modifier.material_density;
+    modifier.smoothing_sigma = 0.;
+    InfillDensityField uniform({{0., 40., &model}}, parent_sigma, {}, AdaptiveInfillMode::SmoothBlend, 0.1, {modifier}, 3);
+    const auto center = uniform.sample_fields({Vec3d(0., 0., 20.)}).front();
+    REQUIRE_THAT(center.density, Catch::Matchers::WithinRel(1., 0.022));
+    const Vec3d corner(14., 14., 20.);
+    const auto unadjusted = uniform.sample_fields({corner}).front();
+    modifier.smoothing_sigma = 8.;
+    InfillDensityField smoothed({{0., 40., &model}}, parent_sigma, {}, AdaptiveInfillMode::SmoothBlend, 0.1, {modifier}, 3);
+    const auto adjusted = smoothed.sample_fields({corner}).front();
+    REQUIRE(adjusted.density > unadjusted.density + 0.1);
+    REQUIRE_THAT(adjusted.distance, Catch::Matchers::WithinAbs(unadjusted.distance, EPSILON));
+}
 
 TEST_CASE("Incremental Voronoi geometry agrees with fresh builds while the slab moves", "[FillVoronoi][Incremental]")
 {
@@ -1154,6 +1244,20 @@ TEST_CASE("Copied Voronoi networks own their storage through dimension changes",
     REQUIRE(contours(mesh).empty());
 }
 
+TEST_CASE("Candidate density bounds include modifier settings and ignore other regions", "[FillVoronoi][MaterialDensity]")
+{
+    const ExPolygons model {rectangle(-10., -10., 10., 10.)};
+    const double density = GENERATE(0., 0.7, 0.9);
+    const double sigma = GENERATE(0., 8.);
+    DensityModifier modifier {3, density, 0., {{0., 20., model}}};
+    modifier.smoothing_sigma = sigma;
+    const DensityModifier unrelated {7, 1., 0., {{0., 20., model}}};
+    InfillDensityField field({{0., 20., &model}}, 0., {}, AdaptiveInfillMode::SmoothBlend, 0.1, {modifier, unrelated}, 3);
+    const double boost = InfillDensityField::density_ratio(0., sigma == 0. ? 0. : 2., 32.);
+    const double maximum = std::max(0.1, std::min(1., density * boost));
+    const double expected = std::max(maximum, double(float(maximum))) / 0.1;
+    REQUIRE_THAT(field.maximum_density_ratio(), Catch::Matchers::WithinRel(expected, 1e-12));
+}
 
 TEST_CASE("Voronoi uses the shared adaptive density gradients over body-relative depth", "[FillVoronoi]")
 {
@@ -1199,6 +1303,18 @@ TEST_CASE("Voronoi unsmoothed material density follows TPMS depth when the model
     }
 }
 
+TEST_CASE("Fused Voronoi interior targets and gradients override the parent without exceeding the candidate bound", "[FillVoronoi][Modifiers]")
+{
+    const ExPolygons model {rectangle(-50., -50., 50., 50.)};
+    DensityModifier modifier {3, 0.1, 0., {{0., 100., {rectangle(-5., -5., 5., 5.)}}}};
+    modifier.interior_density = 0.9;
+    modifier.gradient = AdaptiveInfillGradient::Quadratic;
+    InfillDensityField field({{0., 100., &model}}, 0., {}, AdaptiveInfillMode::SmoothBlend, 0.1, {modifier}, 3);
+    const auto values = field.sample_fields({Vec3d(0., 0., 25.), Vec3d(0., 0., 50.)});
+    REQUIRE_THAT(values[0].density * 0.1, Catch::Matchers::WithinRel(0.3, 0.04));
+    REQUIRE_THAT(values[1].density * 0.1, Catch::Matchers::WithinRel(0.9, 0.04));
+    REQUIRE(values[1].density <= field.maximum_density_ratio());
+}
 
 TEST_CASE("Unbounded empty Voronoi providers stop expanding and report worker errors", "[FillVoronoi]")
 {
@@ -1227,6 +1343,21 @@ TEST_CASE("Unbounded empty Voronoi providers stop expanding and report worker er
     }));
 }
 
+TEST_CASE("An all-zero fused modifier cannot expand the active cloud indefinitely", "[FillVoronoi]")
+{
+    const ExPolygons model {rectangle(-1., -1., 1., 1.)};
+    DensityModifier modifier {3, 0., 0., {{-20., 20., {rectangle(-20., -20., 20., 20.)}}}};
+    auto field = std::make_shared<InfillDensityField>(std::vector<WallSlice>{{-1., 1., &model}},
+        0., WallDistanceProgress{}, AdaptiveInfillMode::Disabled, 0.15, std::vector<DensityModifier>{modifier}, 3);
+    auto provider = std::make_shared<Voronoi::WallDistancePointCloud>([field](const auto &points) {
+        return field->sample_fields(points);
+    }, field->maximum_density() / 0.15);
+    Voronoi::ActivePointCloud cloud(provider);
+    REQUIRE_THROWS_WITH(cloud.update(get_extents(model), 0., 0., 0.5, [](const auto &) {
+        return std::numeric_limits<double>::infinity();
+    }), "Voronoi point sampling found no control points; check infill density and modifiers");
+    REQUIRE(cloud.sites().empty());
+}
 
 TEST_CASE("Active cloud retains sites ingested above its current slab", "[FillVoronoi]")
 {

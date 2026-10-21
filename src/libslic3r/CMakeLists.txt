@@ -346,6 +346,8 @@ set(lisbslic3r_sources
     IMEXZones.hpp
     InfillDensityField.cpp
     InfillDensityField.hpp
+    InfillDensityModifier.hpp
+    InfillMaterialDensity.hpp
     InstanceLock.cpp
     InstanceLock.hpp
     Int128.hpp
