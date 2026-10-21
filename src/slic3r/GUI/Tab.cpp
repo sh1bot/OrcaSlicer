@@ -2971,6 +2971,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("adaptive_infill_mode", "strength_settings_patterns#adaptive-density");
         optgroup->append_single_option_line("adaptive_infill_interior_density", "strength_settings_patterns#interior-density");
         optgroup->append_single_option_line("adaptive_infill_gradient", "strength_settings_patterns#adaptive-gradient");
+        optgroup->append_single_option_line("infill_smoothing_sigma", "strength_settings_patterns#adaptive-density");
         optgroup->append_single_option_line("gyroid_optimized", "strength_settings_patterns#gyroid-optimized");
         optgroup->append_single_option_line("sparse_infill_smooth_factor", "strength_settings_infill#sparse-infill-smooth-factor");
         optgroup->append_single_option_line("infill_direction", "strength_settings_infill#direction");

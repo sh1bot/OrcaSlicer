@@ -68,10 +68,11 @@ Layer completion reports throttled progress and checks cancellation.
 
 ## Spatial density
 
-The [shared material-density field](infill-density.md) grades point density by
-wall depth or lobe/section profiles when Adaptive density is enabled. Disabled
-gives a uniform cloud without preparing a distance field.
+The [shared material-density field](infill-density.md) grades density by wall
+depth or lobe/section profiles when Adaptive density is enabled, and independently reinforces
+corners when smoothing is enabled. The defaults (Disabled and zero smoothing)
+give a uniform cloud without preparing a distance field.
 
-Adaptive point selection reuses the object’s prepared spatial profile. A provider owns its density evaluator; direct profile evaluation has no separate result cache.
+Adaptive point selection reuses the object’s prepared spatial profile. A provider owns its density evaluator; direct profile evaluation has no separate result cache. Gaussian smoothing and modifier compositing cache their prepared buffers.
 
 The object and density evaluators share the same prepared adaptive profile arrays. The object borrows its selected array; clearing the density fields also clears those entries.

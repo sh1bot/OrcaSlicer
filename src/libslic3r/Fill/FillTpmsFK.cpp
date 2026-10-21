@@ -1,3 +1,4 @@
+#include "../InfillDensityField.hpp"
 #include "../ClipperUtils.hpp"
 #include "../MarchingSquares.hpp"
 #include "libslic3r/Point.hpp"
@@ -151,10 +152,14 @@ void FillTpmsFK::_fill_surface_single(const FillParams&              params,
     // Enlarge the bounding box by the multi-line width to avoid artifacts at the edges.
     bbox.offset(scale_((params.multiline + 1) * spacing));
     Polylines polylines;
-    if (params.adaptive_infill_mode != AdaptiveInfillMode::Disabled && this->adaptive_infill_field != nullptr) {
-        polylines = make_adaptive_tpms({fischer_koch, 2. * PI / period(params.density), 2. * PI / period(params.adaptive_infill_interior_density),
-                                        params.adaptive_infill_gradient},
-                                       *this->adaptive_infill_field, bbox, this->z, params.layer_height, spacing, infill_angle);
+    if (params.adaptive_infill_mode != AdaptiveInfillMode::Disabled && this->adaptive_infill_field != nullptr &&
+        (!this->adaptive_infill_field->empty() || this->material_density_field)) {
+        auto frequency = [period](double density) { return 2. * PI / period(float(density)); };
+        AdaptiveTpms tpms {fischer_koch, frequency(params.density), frequency(params.adaptive_infill_interior_density), params.adaptive_infill_gradient};
+        if (this->material_density_field)
+            tpms.frequency_at = [field = this->material_density_field, frequency](const Vec3d &point) { return frequency(field->density(point)); };
+        polylines = make_adaptive_tpms(tpms, *this->adaptive_infill_field, bbox, this->z, params.layer_height, spacing, infill_angle);
+
     } else {
         marchsq::ScalarField sf = marchsq::ScalarField(bbox, this->z, period(params.density));
         // Get simplified lines using coarse tolerance of 0.1mm (this is infill).

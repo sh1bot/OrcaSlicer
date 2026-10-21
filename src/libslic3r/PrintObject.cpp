@@ -818,13 +818,17 @@ bool PrintObject::prepare_infill_point_clouds()
         if (std::none_of(m_layers.begin(), m_layers.end(), [object_region](const Layer *layer) {
                 return !layer->regions()[object_region]->slices.empty();
             })) continue;
+        if (config.sparse_infill_pattern != ipVoronoi && config.sparse_infill_density > 0 && config.sparse_infill_density < 100 && is_adaptive_infill_pattern(config.sparse_infill_pattern) &&
+            config.adaptive_infill_mode == AdaptiveInfillMode::SmoothBlend &&
+            (config.infill_smoothing_sigma > 0.))
+            infill_density_field(InfillDensitySettings::from_config(config));
         if (config.sparse_infill_density > 0 && config.sparse_infill_pattern == ipVoronoi) {
             has_voronoi = true;
             const auto density = InfillDensitySettings::from_config(config);
             double maximum_density = density.mode != AdaptiveInfillMode::Disabled ? std::max(density.material_density, density.interior_density) : density.material_density;
             const double candidate_spacing = Voronoi::PoissonPointCloud::nominal_spacing(
                 printing_region(region_id).flow(*this, frInfill, m_config.layer_height.value).spacing() * config.fill_multiline.value,
-                m_config.layer_height.value, std::min(1., maximum_density));
+                m_config.layer_height.value, std::min(1., maximum_density * InfillDensityField::density_ratio(0., 2.)));
             const Vec3d extent = m_size.cast<double>() * SCALING_FACTOR;
             if (!warned_point_count && extent.prod() / std::pow(candidate_spacing, 3) > 1000000.) {
                 active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
@@ -1316,7 +1320,7 @@ FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
 
 const AdaptiveInfillFields &PrintObject::prepare_adaptive_infill_fields() const
 {
-    const bool signed_distances = false;
+    const bool signed_distances = needs_signed_infill_distances();
     auto &cache = m_voronoi_cloud_cache.density_fields();
     const auto &fields = cache.profiles(signed_distances);
     std::array<bool, size_t(AdaptiveInfillMode::Count)> modes{};
@@ -1347,6 +1351,19 @@ const AdaptiveInfillFields &PrintObject::prepare_adaptive_infill_fields() const
 }
 
 
+bool PrintObject::needs_signed_infill_distances() const
+{
+    for (size_t region = 0; region < num_printing_regions(); ++region) {
+        const auto &config = printing_region(region).config();
+        if (config.sparse_infill_density <= 0.) continue;
+        if (config.sparse_infill_pattern == ipVoronoi && (config.adaptive_infill_mode != AdaptiveInfillMode::Disabled ||
+            config.infill_smoothing_sigma > 0.)) return true;
+        if (is_adaptive_infill_pattern(config.sparse_infill_pattern) && config.adaptive_infill_mode == AdaptiveInfillMode::SmoothBlend &&
+            config.infill_smoothing_sigma > 0.) return true;
+    }
+    return false;
+}
+
 WallDistanceProgress PrintObject::infill_preparation_progress() const
 {
     const int percent = is_step_done(posPrepareInfill) ? 35 : 25;
@@ -1358,6 +1375,8 @@ WallDistanceProgress PrintObject::infill_preparation_progress() const
             switch (stage) {
             case WallDistanceStage::Distance: message = L("Building infill wall distances"); break;
             case WallDistanceStage::Encoding: message = L("Encoding infill wall distances"); break;
+            case WallDistanceStage::SmoothXY: message = L("Smoothing infill wall distances (XY)"); break;
+            case WallDistanceStage::SmoothZ: message = L("Smoothing infill wall distances (Z)"); break;
             case WallDistanceStage::Complete: message = L("Finalizing infill wall distances"); break;
             default: return;
             }
@@ -1365,6 +1384,15 @@ WallDistanceProgress PrintObject::infill_preparation_progress() const
             last_report = now;
             last_stage = stage;
         };
+}
+
+std::shared_ptr<const InfillDensityField> PrintObject::infill_density_field(const InfillDensitySettings &settings) const
+{
+    return m_voronoi_cloud_cache.density_fields().get([this] {
+        std::vector<WallSlice> slices;
+        for (const Layer *layer : layers()) slices.push_back({layer->bottom_z(), layer->print_z, &layer->lslices});
+        return slices;
+    }, settings, infill_preparation_progress());
 }
 
 double PrintObject::voronoi_site_spacing(const PrintRegion &region) const
@@ -1796,6 +1824,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "infill_overhang_angle") {
             steps.emplace_back(posInfill);
         } else if (opt_key == "sparse_infill_pattern"
+                   || opt_key == "infill_smoothing_sigma"
                    || opt_key == "adaptive_infill_mode"
                    || opt_key == "adaptive_infill_interior_density"
                    || opt_key == "adaptive_infill_gradient"
