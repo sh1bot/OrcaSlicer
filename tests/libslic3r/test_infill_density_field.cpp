@@ -26,8 +26,39 @@ ExPolygon rectangle(double x0, double y0, double x1, double y1)
     return ExPolygon(Points {Point::new_scale(x0, y0), Point::new_scale(x1, y0),
                              Point::new_scale(x1, y1), Point::new_scale(x0, y1)});
 }
+float gyroid(float x, float y, float z)
+{
+    return std::sin(x) * std::cos(y) + std::sin(y) * std::cos(z) + std::sin(z) * std::cos(x);
+}
+float diamond(float x, float y, float z)
+{
+    return std::cos(x) * std::cos(y) * std::cos(z) - std::sin(x) * std::sin(y) * std::sin(z);
+}
+float fischer_koch(float x, float y, float z)
+{
+    return std::cos(2 * x) * std::sin(y) * std::cos(z) + std::cos(2 * y) * std::sin(z) * std::cos(x) +
+           std::cos(2 * z) * std::sin(x) * std::cos(y);
+}
+double length(const Polylines &paths)
+{
+    double total = 0.;
+    for (const auto &path : paths) total += unscale<double>(path.length());
+    return total;
+}
 }
 
+TEST_CASE("Shared density scalar queries agree with Voronoi batch queries", "[InfillDensityField]")
+{
+    const ExPolygons model {rectangle(-20., -20., 20., 20.)};
+    const InfillDensityField field({{0., 40., &model}}, 8.);
+    const std::vector<Vec3d> points {Vec3d(0., 0., 20.), Vec3d(18., 18., 2.), Vec3d(19., 0., 20.)};
+    const auto values = field.sample_fields(points);
+    for (size_t i = 0; i < points.size(); ++i) {
+        REQUIRE_THAT(field.density(points[i]), Catch::Matchers::WithinAbs(values[i].density * 0.25, 1e-12));
+        REQUIRE(field.maximum_density() >= field.density(points[i]));
+    }
+    REQUIRE(field.density(points[1]) > 0.25);
+}
 
 TEST_CASE("Density evaluators share geometry while retaining their own settings", "[InfillDensityField]")
 {
@@ -48,6 +79,40 @@ TEST_CASE("Density evaluators share geometry while retaining their own settings"
 }
 
 
+TEST_CASE("Smooth blend accepts constant shared densities without changing lattice phase", "[InfillDensityField][AdaptiveInfillField]")
+{
+    const auto equation = GENERATE(&gyroid, &diamond, &fischer_koch);
+    const double frequency = GENERATE(0.4, 1., 2.5);
+    const ExPolygons model {rectangle(-12., -12., 12., 12.)};
+    const AdaptiveInfillField field({{0., 24., &model}}, get_extents(model), AdaptiveInfillMode::SmoothBlend, [] {});
+    const BoundingBox bounds = get_extents(model);
+    const AdaptiveTpms reference {equation, frequency, frequency, AdaptiveInfillGradient::Linear};
+    AdaptiveTpms shared {equation, 1., 1., AdaptiveInfillGradient::Linear};
+    shared.frequency_at = [frequency](const Vec3d &) { return frequency; };
+    const auto expected = make_adaptive_tpms(reference, field, bounds, 12., 0.2, 0.45, 0.3f);
+    const auto actual = make_adaptive_tpms(shared, field, bounds, 12., 0.2, 0.45, 0.3f);
+    REQUIRE_FALSE(expected.empty());
+    REQUIRE(actual.size() == expected.size());
+    REQUIRE_THAT(length(actual), Catch::Matchers::WithinAbs(length(expected), 0.02));
+}
+
+
+
+
+TEST_CASE("Default density smoothing is disabled without disabling grading", "[InfillDensityField]")
+{
+    const ExPolygons model {rectangle(-20., -20., 20., 20.)};
+    const InfillDensityField defaults({{0., 40., &model}});
+    bool smoothed = false;
+    const InfillDensityField explicit_zero({{0., 40., &model}}, 0., [&](auto stage, double) {
+        smoothed |= stage == WallDistanceStage::SmoothXY || stage == WallDistanceStage::SmoothZ;
+    });
+    REQUIRE_FALSE(smoothed);
+    REQUIRE_THAT(InfillDensitySettings{}.sigma, Catch::Matchers::WithinAbs(0., 1e-12));
+    for (const Vec3d &p : {Vec3d(0., 0., 20.), Vec3d(19., 19., 1.)})
+        REQUIRE_THAT(defaults.density(p), Catch::Matchers::WithinAbs(explicit_zero.density(p), 1e-12));
+    REQUIRE(defaults.density(Vec3d(0., 0., 20.)) < defaults.density(Vec3d(19., 19., 1.)));
+}
 
 
 TEST_CASE("Density cache shares raw distances across settings and keeps returned fields alive", "[InfillDensityField]")
@@ -75,7 +140,7 @@ TEST_CASE("Density cache shares raw distances across settings and keeps returned
 }
 
 
-TEST_CASE("Adaptive geometry is retained across density settings", "[InfillDensityField][Regression]")
+TEST_CASE("Adaptive geometry shares raw distances across modes and density settings", "[InfillDensityField][Regression]")
 {
     const ExPolygons model {rectangle(-8., -8., 8., 8.)};
     const auto slices = [&] { return std::vector<WallSlice> {{0., 16., &model}}; };
@@ -83,8 +148,8 @@ TEST_CASE("Adaptive geometry is retained across density settings", "[InfillDensi
     const auto blend = cache.geometry(slices, AdaptiveInfillMode::SmoothBlend);
     const auto warp = cache.geometry(slices, AdaptiveInfillMode::DistanceWarp);
     REQUIRE(blend == cache.geometry(slices, AdaptiveInfillMode::SmoothBlend));
-    REQUIRE(blend->distances().grid_spacing() == warp->distances().grid_spacing());
-    REQUIRE_FALSE(blend->distances().has_signed_distances());
+    REQUIRE(&blend->distances() == &warp->distances());
+    REQUIRE(blend->distances().has_signed_distances());
     InfillDensitySettings settings;
     settings.mode = AdaptiveInfillMode::SmoothBlend;
     const auto first = cache.get(slices, settings);
@@ -106,7 +171,7 @@ TEST_CASE("Voronoi adaptive density follows every shared spatial profile", "[Inf
     const ExPolygons model {rectangle(-16., -10., 16., 10.)};
     const auto slices = [&] { return std::vector<WallSlice>{{0., 24., &model}}; };
     InfillDensityCache cache;
-    const InfillDensitySettings settings {mode, 0.3, 0.03, gradient};
+    const InfillDensitySettings settings {mode, 0., 0.3, 0.03, gradient};
     const auto material = cache.get(slices, settings);
     const auto shape = cache.geometry(slices, mode);
     const auto raw = cache.geometry(slices, AdaptiveInfillMode::SmoothBlend);
@@ -139,7 +204,7 @@ TEST_CASE("Voronoi distance application modes produce the same continuous densit
     const ExPolygons model {rectangle(-16., -10., 16., 10.), rectangle(24., -6., 36., 6.)};
     const auto slices = [&] { return std::vector<WallSlice>{{0., 24., &model}}; };
     InfillDensityCache cache;
-    InfillDensitySettings settings {AdaptiveInfillMode::SmoothBlend, 0.3, 0.03, AdaptiveInfillGradient::Quadratic};
+    InfillDensitySettings settings {AdaptiveInfillMode::SmoothBlend, 0., 0.3, 0.03, AdaptiveInfillGradient::Quadratic};
     const auto reference = cache.get(slices, settings);
     for (const auto mode : {AdaptiveInfillMode::DistanceWarp, AdaptiveInfillMode::SteppedShells}) {
         settings.mode = mode;
@@ -157,7 +222,7 @@ TEST_CASE("Normal density profiles stay constant along their selected axis", "[I
     const int axis = GENERATE(0, 1, 2);
     const auto mode = axis == 0 ? AdaptiveInfillMode::NormalX : axis == 1 ? AdaptiveInfillMode::NormalY : AdaptiveInfillMode::NormalZ;
     const ExPolygons model {rectangle(-16., -10., 16., 10.)};
-    InfillDensityField field({{0., 24., &model}}, {}, mode, 0.3, 0.03);
+    InfillDensityField field({{0., 24., &model}}, 0., {}, mode, 0.3, 0.03);
     const Vec3d center(0., 0., 12.), extent(32., 20., 24.);
     Vec3d along = center, across = center;
     along[axis] += 0.25 * extent[axis];
@@ -196,13 +261,45 @@ TEST_CASE("Uniform material density retains its floating point value", "[InfillD
         Catch::Matchers::WithinRel(settings.material_density, 1e-12));
 }
 
+TEST_CASE("Zero corner sigma preserves the upstream adaptive profile near floors", "[InfillDensityField][Regression]")
+{
+    const auto mode = GENERATE(AdaptiveInfillMode::SmoothBlend, AdaptiveInfillMode::Lobes,
+        AdaptiveInfillMode::NormalX, AdaptiveInfillMode::NormalY, AdaptiveInfillMode::NormalZ);
+    const ExPolygons model {rectangle(-10., -10., 10., 10.)};
+    const auto slices = [&] { return std::vector<WallSlice>{{0., 20., &model}}; };
+    InfillDensityCache cache;
+    InfillDensitySettings settings;
+    settings.mode = mode;
+    settings.material_density = 0.3;
+    settings.interior_density = 0.06;
+    settings.gradient = AdaptiveInfillGradient::Exponential;
+    const auto field = cache.get(slices, settings);
+    const auto shape = cache.geometry(slices, mode);
+    const Vec3d point(1.234, 3.456, 0.25);
+    const auto at_depth = [&](double depth) {
+        return adaptive_density_scale(settings.interior_density / settings.material_density, settings.gradient, depth);
+    };
+    double ratio = 1.;
+    if (shape->distances().signed_distance(point) < 0.) {
+        if (mode == AdaptiveInfillMode::SmoothBlend) ratio = at_depth(shape->depth(point));
+        else {
+            AdaptiveInfillField::Radials radials;
+            const size_t count = shape->radial(point, radials);
+            REQUIRE(count > 0);
+            ratio = 0.;
+            for (size_t i = 0; i < count; ++i) ratio += radials[i].weight * at_depth(1. - radials[i].t);
+        }
+    }
+    REQUIRE_THAT(field->density(point), Catch::Matchers::WithinRel(settings.material_density * ratio, 1e-12));
+}
+
 TEST_CASE("Object profile arrays expose the same geometry used by density evaluation", "[InfillDensityField][Regression]")
 {
     const ExPolygons model {rectangle(-8., -8., 8., 8.)};
     size_t loads = 0;
     const auto slices = [&] { ++loads; return std::vector<WallSlice>{{0., 16., &model}}; };
     InfillDensityCache cache;
-    const auto &profiles = cache.profiles(false);
+    const auto &profiles = cache.profiles(true);
     const auto shape = cache.geometry(slices, AdaptiveInfillMode::SmoothBlend);
     REQUIRE(profiles[size_t(AdaptiveInfillMode::SmoothBlend)] == shape);
     const size_t initial_loads = loads;

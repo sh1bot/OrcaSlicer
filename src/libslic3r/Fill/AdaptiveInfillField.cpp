@@ -753,6 +753,21 @@ struct AdaptiveTpmsField
                 const double frequency = tpms.surface_frequency * levels.scale(level);
                 return tpms.equation(float(frequency * x), float(frequency * y), float(frequency * z));
             };
+            if (tpms.frequency_at) {
+                const double frequency = tpms.frequency_at(obj);
+                if (!(frequency > 0.)) return -1.f;
+                // Extend the same fixed lattice levels beyond the root's density range.
+                // A uniform root still needs levels for reinforced densities.
+                const double step = levels.count == 0 ? std::log(BlendRatio) : std::log(levels.ratio) / levels.count;
+                const double c = std::log(frequency / tpms.surface_frequency) / step;
+                const double k = std::floor(c), u = c - k;
+                const double w = u * u * (3. - 2. * u);
+                const auto value = [&](double level) {
+                    const double f = tpms.surface_frequency * std::exp(step * level);
+                    return tpms.equation(float(f * x), float(f * y), float(f * z));
+                };
+                return float((1. - w) * value(k) + w * value(k + 1.));
+            }
             if (levels.count == 0)
                 return lattice(0);
             const double c = std::clamp(levels.level(radial_field.depth(obj)), 0., double(levels.count));

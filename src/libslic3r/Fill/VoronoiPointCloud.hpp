@@ -47,7 +47,7 @@ using WallDistanceSamples = std::function<std::vector<InfillDensitySample>(const
 
 class WallDistancePointCloud : public PoissonPointCloud {
 public:
-    explicit WallDistancePointCloud(WallDistanceSamples samples, double maximum_ratio = 1.);
+    explicit WallDistancePointCloud(WallDistanceSamples samples, double maximum_ratio = InfillDensityField::density_ratio(0., 2., 0., 0.01, AdaptiveInfillGradient::Exponential));
     std::vector<Vec3d> points_in(const BoundingBoxf3 &box, double spacing) const override;
     std::vector<Vec3d> points_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const override;
     double cell_size(double spacing) const override { return 2. * spacing / m_maximum_ratio; }

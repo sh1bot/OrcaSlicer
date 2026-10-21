@@ -845,15 +845,21 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     // The sparse infill density is the surface density of the adaptive infill; at 100% the infill is solid.
     bool have_adaptive_infill_pattern = have_infill && config->option<ConfigOptionPercent>("sparse_infill_density")->value < 100 &&
                             is_adaptive_infill_pattern(pattern);
-    toggle_line("adaptive_infill_mode", have_adaptive_infill_pattern, -1, _L("Select Gyroid, TPMS-D or TPMS-FK infill with sparse infill density greater than zero and less than 100%."));
-    bool have_adaptive_infill = have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
-    const wxString adaptive_density_reason = _L("Enable adaptive density for Gyroid, TPMS-D or TPMS-FK infill with sparse infill density greater than zero and less than 100%.");
-    toggle_line("adaptive_infill_interior_density", have_adaptive_infill, -1, adaptive_density_reason);
-    toggle_line("adaptive_infill_gradient", have_adaptive_infill, -1, adaptive_density_reason);
+    const bool voronoi_infill = have_infill && pattern == ipVoronoi;
+    const bool shared_density_infill = voronoi_infill;
+    toggle_line("adaptive_infill_mode", have_adaptive_infill_pattern || shared_density_infill, -1, _L("Select Voronoi, Gyroid, TPMS-D or TPMS-FK infill with nonzero sparse infill density."));
+    bool have_adaptive_infill_mode = have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
+    const bool shared_density_adaptive = shared_density_infill && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
+    const wxString adaptive_density_reason = _L("Enable adaptive density for Voronoi, Gyroid, TPMS-D or TPMS-FK infill.");
+    toggle_line("adaptive_infill_interior_density", have_adaptive_infill_mode || shared_density_adaptive, -1, adaptive_density_reason);
+    toggle_line("adaptive_infill_gradient", have_adaptive_infill_mode || shared_density_adaptive, -1, adaptive_density_reason);
 
     // gyroid_optimized only applies when the sparse infill pattern is gyroid without adaptive density;
     // hide the whole line otherwise.
-    toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid && !have_adaptive_infill, -1, _L("Select Gyroid infill with nonzero sparse infill density and disable adaptive density to use this setting."));
+    toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid && !have_adaptive_infill_mode, -1, _L("Select Gyroid infill with nonzero sparse infill density and disable adaptive density to use this setting."));
+    toggle_line("infill_smoothing_sigma", have_infill && (shared_density_infill ||
+        (have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") == AdaptiveInfillMode::SmoothBlend)));
+
 
     // If there is infill, enable/disable fill_multiline according to whether the pattern supports multiline infill.
     if (have_infill) {

@@ -1,3 +1,4 @@
+#include <limits>
 // Regression test for the "option in def + UI but missing from preset key list"
 // crash class.
 //
@@ -18,6 +19,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_message.hpp>
+#include "catch2/matchers/catch_matchers.hpp"
+#include "catch2/matchers/catch_matchers_floating_point.hpp"
+#include "libslic3r/libslic3r.h"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/PrintConfig.hpp"
 
@@ -72,3 +76,23 @@ TEST_CASE("Every PrintObjectConfig field is registered in a preset key list", "[
     check_keys_are_in_a_preset(PrintObjectConfig::defaults().keys(), "PrintObjectConfig");
 }
 // clang-format on
+
+TEST_CASE("Print presets initialize and retain shared Voronoi density settings and smoothing", "[Preset][Config]")
+{
+    DynamicPrintConfig config;
+    config.apply_only(FullPrintConfig::defaults(), Preset::print_options());
+    REQUIRE_THAT(config.opt_float("adaptive_infill_interior_density"), Catch::Matchers::WithinAbs(5., EPSILON));
+    REQUIRE(config.opt_enum<AdaptiveInfillGradient>("adaptive_infill_gradient") == AdaptiveInfillGradient::Linear);
+    REQUIRE_THAT(config.opt_float("infill_smoothing_sigma"), Catch::Matchers::WithinAbs(0., EPSILON));
+    config.set_deserialize_strict("adaptive_infill_interior_density", "15%");
+    config.set_deserialize_strict("infill_smoothing_sigma", "12");
+    REQUIRE_THAT(config.opt_float("adaptive_infill_interior_density"), Catch::Matchers::WithinAbs(15., EPSILON));
+    REQUIRE_THAT(config.opt_float("infill_smoothing_sigma"), Catch::Matchers::WithinAbs(12., EPSILON));
+}
+
+TEST_CASE("Earlier development density keys load into the shared infill settings", "[Preset][Config]")
+{
+    DynamicPrintConfig config;
+    config.set_deserialize_strict({{"voronoi_smoothing_sigma", "3"}});
+    REQUIRE_THAT(config.opt_float("infill_smoothing_sigma"), Catch::Matchers::WithinAbs(3., EPSILON));
+}
