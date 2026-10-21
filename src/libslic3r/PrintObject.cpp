@@ -1371,7 +1371,7 @@ bool PrintObject::needs_signed_infill_distances() const
         const auto &config = printing_region(region).config();
         if (config.sparse_infill_density <= 0.) continue;
         if (config.sparse_infill_pattern == ipVoronoi && (config.adaptive_infill_mode != AdaptiveInfillMode::Disabled ||
-            config.infill_smoothing_sigma > 0. || config.voronoi_snap_to_wall)) return true;
+            config.infill_smoothing_sigma > 0. || config.voronoi_snap_to_wall || config.voronoi_hull_threshold > 0.)) return true;
         if (is_adaptive_infill_pattern(config.sparse_infill_pattern) && config.adaptive_infill_mode == AdaptiveInfillMode::SmoothBlend &&
             config.infill_smoothing_sigma > 0.) return true;
     }
@@ -1394,6 +1394,7 @@ WallDistanceProgress PrintObject::infill_preparation_progress() const
             case WallDistanceStage::MaterialDensity: message = L("Preparing infill material density"); break;
             case WallDistanceStage::Modifiers: message = L("Blending infill material density modifiers"); break;
             case WallDistanceStage::Relaxation: message = L("Relaxing Voronoi control points"); break;
+            case WallDistanceStage::VoidRefinement: message = L("Refining Voronoi void supports"); break;
             case WallDistanceStage::Complete: message = L("Finalizing infill wall distances"); break;
             default: return;
             }
@@ -1435,6 +1436,7 @@ Voronoi::PointCloudSettings PrintObject::voronoi_cloud_settings(const PrintRegio
     }
     settings.snap = config.voronoi_snap_to_wall.value;
     settings.region_id = infill_density_region(region.print_object_region_id());
+    settings.hull_threshold = 0.01 * config.voronoi_hull_threshold.value;
     return settings;
 }
 
@@ -1852,7 +1854,7 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (opt_key == "infill_modifier_blend") {
             steps.emplace_back(posSlice);
         } else if (opt_key == "sparse_infill_pattern"
-                   || opt_key == "voronoi_relaxation_iterations" || opt_key == "voronoi_trace_shell" || opt_key == "voronoi_snap_to_wall"
+                   || opt_key == "voronoi_relaxation_iterations" || opt_key == "voronoi_trace_shell" || opt_key == "voronoi_snap_to_wall" || opt_key == "voronoi_hull_threshold"
                    || opt_key == "voronoi_cloud_method"
                    || opt_key == "infill_smoothing_sigma"
                    || opt_key == "adaptive_infill_mode"

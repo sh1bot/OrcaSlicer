@@ -3779,6 +3779,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(0));
 
+    def = this->add("voronoi_hull_threshold", coPercent);
+    def->label = L("Voronoi hull density threshold");
+    def->category = L("Strength");
+    def->tooltip = L("Remove control points below this absolute material density, then attempt to break large shallow faces by inserting support points, including inside the cleared region. Zero disables the experiment. Refinement targets faces below 35 degrees spanning more than 10 mm and is limited to 256 inserted points; it does not guarantee printable vaulting.");
+    def->sidetext = "%";
+    def->min = 0.;
+    def->max = 100.;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(0.));
+
     def = this->add("voronoi_snap_to_wall", coBool);
     def->label = L("Voronoi snap points to walls");
     def->category = L("Strength");

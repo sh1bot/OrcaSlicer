@@ -1471,6 +1471,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<VoronoiCloudMethod>, voronoi_cloud_method))
     ((ConfigOptionInt,                  voronoi_relaxation_iterations))
     ((ConfigOptionBool,                 voronoi_snap_to_wall))
+    ((ConfigOptionPercent,              voronoi_hull_threshold))
     ((ConfigOptionBool,                 voronoi_trace_shell))
     ((ConfigOptionFloat,                infill_modifier_blend))
     ((ConfigOptionFloat,                infill_smoothing_sigma))

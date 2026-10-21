@@ -1089,14 +1089,14 @@ TEST_CASE("Uniform Voronoi density retains corner boosts", "[FillVoronoi]")
     Voronoi::WallDistanceCloudCache cache;
     size_t loads = 0;
     const auto slices = [&] { ++loads; return std::vector<WallSlice>{{0., 20., &outlines}}; };
-    const auto plain = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {});
+    const auto plain = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, {}, {});
     const BoundingBoxf3 box(Vec3d(-5., -5., 0.), Vec3d(5., 5., 10.));
     REQUIRE(plain->points_in(box, 2.) == Voronoi::PoissonPointCloud().points_in(box, 2.));
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {}) == plain);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, {}, {}) == plain);
     REQUIRE(loads == 0);
-    const auto graded = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {});
+    const auto graded = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, {}, {});
     REQUIRE(graded != plain);
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {}) == graded);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, {}, {}) == graded);
     REQUIRE(loads == 1);
     REQUIRE_THROWS_AS(Cloud({}, -1.), std::invalid_argument);
 }
@@ -1130,16 +1130,16 @@ TEST_CASE("Canceled Voronoi smoothing leaves the cache usable", "[FillVoronoi]")
     const ExPolygons outlines{rectangle(0., 0., 20., 20.)};
     Voronoi::WallDistanceCloudCache cache;
     const auto slices = [&] { return std::vector<WallSlice>{{0., 20., &outlines}}; };
-    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, [](WallDistanceStage stage, double) {
+    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, [](WallDistanceStage stage, double) {
             if (stage == WallDistanceStage::SmoothXY) throw std::runtime_error("cancel");
         }, {}), std::runtime_error);
     bool completed = false;
-    const auto provider = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, [&](WallDistanceStage stage, double fraction) {
+    const auto provider = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, [&](WallDistanceStage stage, double fraction) {
             if (stage == WallDistanceStage::Complete && fraction == 1.) completed = true;
         }, {});
     REQUIRE(completed);
     REQUIRE(provider != nullptr);
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, [](auto, double) { throw std::runtime_error("cached fields must not rebuild"); }, {}) == provider);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, [](auto, double) { throw std::runtime_error("cached fields must not rebuild"); }, {}) == provider);
 }
 
 TEST_CASE("Point-cloud orientation uses the object centre and shares wall-distance tables", "[FillVoronoi][Rotation]")
@@ -1150,13 +1150,13 @@ TEST_CASE("Point-cloud orientation uses the object centre and shares wall-distan
     const auto slices = [&] { return std::vector<WallSlice>{{-6., 6., &outlines}}; };
     const bool adaptive = GENERATE(false, true);
     const double angle = 0.37;
-    const auto original = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, -1}, {}, {});
-    const auto rotated = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, angle, false, -1}, [](auto stage, double) {
+    const auto original = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, -1, 0.}, {}, {});
+    const auto rotated = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, angle, false, -1, 0.}, [](auto stage, double) {
         if (stage == WallDistanceStage::Distance) throw std::runtime_error("Distances already cached");
     }, {});
     REQUIRE(rotated != original);
-    REQUIRE(rotated == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, angle, false, -1}, {}, {}));
-    REQUIRE(original == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 2. * std::acos(-1.), false, -1}, {}, {}));
+    REQUIRE(rotated == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, angle, false, -1, 0.}, {}, {}));
+    REQUIRE(original == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 2. * std::acos(-1.), false, -1, 0.}, {}, {}));
     const BoundingBoxf3 box(Vec3d(-20., -20., -10.), Vec3d(20., 20., 10.));
     if (!adaptive) {
         if (method == VoronoiCloudMethod::Random)
@@ -1164,9 +1164,9 @@ TEST_CASE("Point-cloud orientation uses the object centre and shares wall-distan
         else
             REQUIRE(rotated->points_in(box, 3.) == Voronoi::LatticePointCloud(method, {}, 1., angle, Vec2d(4., -3.)).points_in(box, 3.));
     }
-    const auto relaxed = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, angle, false, -1}, {}, {});
-    REQUIRE(relaxed == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, angle, false, -1}, {}, {}));
-    REQUIRE(relaxed != cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, 0., false, -1}, {}, {}));
+    const auto relaxed = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, angle, false, -1, 0.}, {}, {});
+    REQUIRE(relaxed == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, angle, false, -1, 0.}, {}, {}));
+    REQUIRE(relaxed != cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, 0., false, -1, 0.}, {}, {}));
 }
 
 TEST_CASE("Spring relaxation balances interior edges while holding the cloud boundary", "[FillVoronoi][Relaxation]")
@@ -1241,8 +1241,8 @@ TEST_CASE("Zero relaxation retains the original provider without preparing an ob
     Voronoi::WallDistanceCloudCache cache;
     int loads = 0;
     const auto slices = [&] { ++loads; return std::vector<WallSlice>{}; };
-    const auto original = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {});
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 4., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {}) == original);
+    const auto original = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, {}, {});
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 4., VoronoiCloudMethod::Random, 0, 0., false, -1, 0.}, {}, {}) == original);
     REQUIRE_FALSE(original->extent().has_value());
     REQUIRE(loads == 0);
 }
@@ -1253,13 +1253,13 @@ TEST_CASE("Canceled point relaxation leaves the generated provider reusable", "[
     const ExPolygons outlines {rectangle(0., 0., 12., 12.)};
     Voronoi::WallDistanceCloudCache cache;
     const auto slices = [&] { return std::vector<WallSlice>{{0., 12., &outlines}}; };
-    const auto original = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 0, 0., false, -1}, {}, {});
-    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1}, [](WallDistanceStage stage, double fraction) {
+    const auto original = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 0, 0., false, -1, 0.}, {}, {});
+    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1, 0.}, [](WallDistanceStage stage, double fraction) {
         if (stage == WallDistanceStage::Relaxation && fraction > 0.1) throw std::runtime_error("Canceled");
     }, {}), std::runtime_error);
-    REQUIRE(original == cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 0, 0., false, -1}, {}, {}));
-    const auto relaxed = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1}, {}, {});
-    REQUIRE(relaxed == cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1}, {}, {}));
+    REQUIRE(original == cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 0, 0., false, -1, 0.}, {}, {}));
+    const auto relaxed = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1, 0.}, {}, {});
+    REQUIRE(relaxed == cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1, 0.}, {}, {}));
     REQUIRE(relaxed != original);
     REQUIRE(relaxed->extent()->defined);
 }
@@ -1538,12 +1538,12 @@ TEST_CASE("Fused point clouds accommodate higher modifier density and empty inte
     if (target > 0.) modifier.interior_density = target;
     Voronoi::WallDistanceCloudCache cache;
     const auto slices = [&] { return std::vector<WallSlice>{{0., 40., &model}}; };
-    const auto field = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.1, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, 3}, {}, {modifier});
+    const auto field = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.1, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, 3, 0.}, {}, {modifier});
     const BoundingBoxf3 box(Vec3d(4., -5., 15.), Vec3d(14., 5., 25.));
     const auto points = field->points_in(box, 3.);
     if (target == 0.) REQUIRE(points.empty());
     else {
-        const auto uniform = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, -1}, {}, {})->points_in(box, 3.);
+        const auto uniform = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, -1, 0.}, {}, {})->points_in(box, 3.);
         REQUIRE(points.size() > 50 * uniform.size());
     }
     const auto spacing = field->local_spacing({Vec3d(10., 0., 20.)}, 3.).front();
