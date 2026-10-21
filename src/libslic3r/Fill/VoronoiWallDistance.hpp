@@ -37,7 +37,7 @@ public:
 private:
     std::mutex m_mutex;
     InfillDensityCache m_fields;
-    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, VoronoiCloudMethod, int, double, bool, double, AdaptiveInfillGradient, double>, std::shared_ptr<const PointCloudProvider>> m_providers;
+    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, VoronoiCloudMethod, int, double, bool, double, AdaptiveInfillGradient, double, bool>, std::shared_ptr<const PointCloudProvider>> m_providers;
 };
 
 } // namespace Slic3r::Voronoi
