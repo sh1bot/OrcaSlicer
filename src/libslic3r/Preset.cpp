@@ -1222,6 +1222,7 @@ static std::vector<std::string> s_Preset_print_options{
     "gyroid_optimized",
     "sparse_infill_pattern",
     "voronoi_cloud_method",
+    "infill_modifier_blend",
     "infill_smoothing_sigma",
     "sparse_infill_smooth_factor",
     "lateral_lattice_angle_1",

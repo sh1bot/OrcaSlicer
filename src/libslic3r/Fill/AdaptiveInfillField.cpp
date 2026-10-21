@@ -757,7 +757,7 @@ struct AdaptiveTpmsField
                 const double frequency = tpms.frequency_at(obj);
                 if (!(frequency > 0.)) return -1.f;
                 // Extend the same fixed lattice levels beyond the root's density range.
-                // A uniform root still needs levels for reinforced densities.
+                // A uniform root still needs levels for reinforced/modifier densities.
                 const double step = levels.count == 0 ? std::log(BlendRatio) : std::log(levels.ratio) / levels.count;
                 const double c = std::log(frequency / tpms.surface_frequency) / step;
                 const double k = std::floor(c), u = c - k;
