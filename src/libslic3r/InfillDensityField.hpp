@@ -75,8 +75,6 @@ public:
 private:
     std::mutex m_mutex;
     std::map<std::pair<AdaptiveInfillMode, bool>, std::shared_ptr<const AdaptiveInfillField>> m_geometry;
-    std::map<std::pair<int, bool>, std::shared_ptr<const AdaptiveInfillDistanceField>> m_distances;
-    std::map<std::tuple<AdaptiveInfillMode, double, double, AdaptiveInfillGradient>, std::shared_ptr<const InfillDensityField>> m_fields;
 };
 
 } // namespace Slic3r

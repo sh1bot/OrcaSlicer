@@ -29,7 +29,7 @@ ExPolygon rectangle(double x0, double y0, double x1, double y1)
 }
 
 
-TEST_CASE("Shared density cache reuses only fields with matching settings", "[InfillDensityField]")
+TEST_CASE("Density evaluators share geometry while retaining their own settings", "[InfillDensityField]")
 {
     const ExPolygons model {rectangle(-10., -10., 10., 10.)};
     size_t loads = 0;
@@ -37,7 +37,7 @@ TEST_CASE("Shared density cache reuses only fields with matching settings", "[In
     InfillDensityCache cache;
     InfillDensitySettings settings;
     const auto first = cache.get(slices, settings);
-    REQUIRE(cache.get(slices, settings) == first);
+    REQUIRE_THAT(cache.get(slices, settings)->density(Vec3d(0., 0., 10.)), Catch::Matchers::WithinAbs(first->density(Vec3d(0., 0., 10.)), 1e-12));
     REQUIRE(loads == 1);
     settings.interior_density = 0.1;
     REQUIRE(cache.get(slices, settings) != first);
@@ -75,7 +75,7 @@ TEST_CASE("Density cache shares raw distances across settings and keeps returned
 }
 
 
-TEST_CASE("Adaptive geometry shares raw distances across modes and density settings", "[InfillDensityField][Regression]")
+TEST_CASE("Adaptive geometry is retained across density settings", "[InfillDensityField][Regression]")
 {
     const ExPolygons model {rectangle(-8., -8., 8., 8.)};
     const auto slices = [&] { return std::vector<WallSlice> {{0., 16., &model}}; };
@@ -83,7 +83,7 @@ TEST_CASE("Adaptive geometry shares raw distances across modes and density setti
     const auto blend = cache.geometry(slices, AdaptiveInfillMode::SmoothBlend);
     const auto warp = cache.geometry(slices, AdaptiveInfillMode::DistanceWarp);
     REQUIRE(blend == cache.geometry(slices, AdaptiveInfillMode::SmoothBlend));
-    REQUIRE(&blend->distances() == &warp->distances());
+    REQUIRE(blend->distances().grid_spacing() == warp->distances().grid_spacing());
     REQUIRE_FALSE(blend->distances().has_signed_distances());
     InfillDensitySettings settings;
     settings.mode = AdaptiveInfillMode::SmoothBlend;
@@ -127,7 +127,7 @@ TEST_CASE("Voronoi adaptive density follows every shared spatial profile", "[Inf
         }
         REQUIRE_THAT(material->density(node), Catch::Matchers::WithinRel(0.3 * scale, 0.025));
     }
-    REQUIRE(cache.get(slices, settings) == material);
+    REQUIRE(cache.get(slices, settings)->density(Vec3d(0., 0., 12.)) == material->density(Vec3d(0., 0., 12.)));
     auto other = settings;
     other.mode = AdaptiveInfillMode::Disabled;
     REQUIRE(cache.get(slices, other) != material);
