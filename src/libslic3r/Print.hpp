@@ -1,7 +1,10 @@
 #ifndef slic3r_Print_hpp_
 #define slic3r_Print_hpp_
 
+#include "InfillDensityField.hpp"
+#include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "Config.hpp"
+#include "VoronoiCloudMethod.hpp"
 #include "Model.hpp"
 #include "Polygon.hpp"
 #include "Fill/FillBase.hpp"
@@ -13,6 +16,7 @@
 #include "Fill/FillAdaptive.hpp"
 #include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
+#include "Fill/VoronoiWallDistance.hpp"
 
 #include "BoundingBox.hpp"
 #include "ExtrusionEntityCollection.hpp"
@@ -32,6 +36,7 @@
 #include "BeltTransform.hpp"
 #include "ObjectID.hpp"
 #include "TriangleSelector.hpp"
+#include "libslic3r/Fill/VoronoiPointCloud.hpp"
 #include "libslic3r.h"
 
 #include <Eigen/Geometry>
@@ -328,6 +333,8 @@ public:
         std::vector<PaintedRegion>          painted_regions;
         std::vector<FuzzySkinPaintedRegion> fuzzy_skin_painted_regions;
 
+        int density_modifier_parent(int index) const;
+
         bool has_volume(const ObjectID id) const {
             auto it = lower_bound_by_predicate(this->volumes.begin(), this->volumes.end(), [id](const VolumeExtents &l) { return l.volume_id < id; });
             return it != this->volumes.end() && it->volume_id == id;
@@ -407,7 +414,11 @@ public:
     double                      max_z() const         { return m_max_z; }
     // Centering offset of the sliced mesh from the scaled and rotated mesh of the model.
     const Point& 			     center_offset() const  { return m_center_offset; }
-    const AdaptiveInfillField*       adaptive_infill_field(AdaptiveInfillMode mode) const { return m_adaptive_infill_fields[size_t(mode)].get(); }
+    const AdaptiveInfillField*       adaptive_infill_field(AdaptiveInfillMode mode) const
+    {
+        const auto *field = m_adaptive_infill_fields ? (*m_adaptive_infill_fields)[size_t(mode)].get() : nullptr;
+        return field && (mode == AdaptiveInfillMode::SmoothBlend || !field->empty()) ? field : nullptr;
+    }
 
     // BBS
     void generate_support_preview();
@@ -453,7 +464,14 @@ public:
     size_t 			total_layer_count() const { return this->layer_count() + this->support_layer_count(); }
     size_t 			layer_count() const { return m_layers.size(); }
     void 			clear_layers();
+    int infill_density_region(int region_id) const;
+    std::shared_ptr<const InfillDensityField> infill_density_field(const InfillDensitySettings &settings, int region_id = -1) const;
+    WallDistanceProgress infill_preparation_progress() const;
+    bool needs_signed_infill_distances() const;
+    bool prepare_infill_point_clouds();
     double voronoi_site_spacing(const PrintRegion &region) const;
+    Voronoi::PointCloudSettings voronoi_cloud_settings(const PrintRegion &region) const;
+    std::shared_ptr<const Voronoi::PointCloudProvider> voronoi_point_cloud(const Voronoi::PointCloudSettings &settings) const;
     const Layer* 	get_layer(int idx) const { return m_layers[idx]; }
     Layer* 			get_layer(int idx) 		 { return m_layers[idx]; }
     // Get a layer exactly at print_z.
@@ -575,6 +593,8 @@ public:
     static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index);
 
 private:
+    mutable Voronoi::WallDistanceCloudCache m_voronoi_cloud_cache;
+    std::vector<DensityModifier> m_infill_density_modifiers;
     void make_perimeters();
     void prepare_infill();
     void infill();
@@ -656,7 +676,7 @@ private:
     FillAdaptive::RegionOctrees prepare_adaptive_infill_data(
         const std::vector<std::pair<const Surface*, const Layer*>>& surfaces_w_layer) const;
     FillLightning::GeneratorPtr prepare_lightning_infill_data();
-    AdaptiveInfillFields prepare_adaptive_infill_fields() const;
+    const AdaptiveInfillFields &prepare_adaptive_infill_fields() const;
 
     // BBS
     SupportNecessaryType is_support_necessary();
@@ -707,7 +727,8 @@ private:
     FillAdaptive::RegionOctrees             m_adaptive_fill_octrees;
     std::vector<BoundingBox>                m_separated_body_bboxes;
     FillLightning::GeneratorPtr m_lightning_generator;
-    AdaptiveInfillFields m_adaptive_infill_fields;
+    // Borrows the selected representation from the object-owned density fields.
+    const AdaptiveInfillFields *m_adaptive_infill_fields = nullptr;
 
     std::vector < VolumeSlices >            firstLayerObjSliceByVolume;
     std::vector<groupedVolumeSlices>        firstLayerObjSliceByGroups;

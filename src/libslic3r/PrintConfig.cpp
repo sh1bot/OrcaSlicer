@@ -1,4 +1,7 @@
 #include "PrintConfig.hpp"
+#include "Fill/VoronoiRelaxation.hpp"
+#include "InfillDensityField.hpp"
+#include "VoronoiCloudMethod.hpp"
 #include "CommonDefs.hpp"
 #include "Point.hpp"
 #include "Polygon.hpp"
@@ -248,6 +251,13 @@ static t_config_enum_values s_keys_map_PowerLossRecoveryMode {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(PowerLossRecoveryMode)
 
+static t_config_enum_values s_keys_map_VoronoiCloudMethod {
+    {"random", int(VoronoiCloudMethod::Random)},
+    {"fcc", int(VoronoiCloudMethod::Fcc)},
+    {"cubic", int(VoronoiCloudMethod::Cubic)}
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(VoronoiCloudMethod)
+
 static t_config_enum_values s_keys_map_CenterOfSurfacePattern{
     {"each_surface", int(CenterOfSurfacePattern::Each_Surface)},
     {"each_model", int(CenterOfSurfacePattern::Each_Model)},
@@ -391,6 +401,7 @@ static t_config_enum_values s_keys_map_AdaptiveInfillGradient{
     { "exponential", int(AdaptiveInfillGradient::Exponential) },
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(AdaptiveInfillGradient)
+
 
 //BBS
 static t_config_enum_values s_keys_map_PrintSequence {
@@ -3594,7 +3605,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("infill_direction", coFloat);
     def->label = L("Sparse infill direction");
     def->category = L("Strength");
-    def->tooltip = L("This is the angle for sparse infill pattern, which controls the start or main direction of lines. Voronoi uses a point cloud fixed in model coordinates and ignores this setting.");
+    def->tooltip = L("This is the angle for sparse infill pattern, which controls the start or main direction of lines. Voronoi rotates a fixed 3D point cloud around Z; per-layer rotation templates do not apply.");
     def->sidetext = u8"°";	// degrees, don't need translation
     def->min = 0;
     def->max = 360;
@@ -3670,7 +3681,8 @@ void PrintConfigDef::init_fff_params()
     def             = this->add("adaptive_infill_mode", coEnum);
     def->label      = L("Adaptive density (experimental)");
     def->category   = L("Strength");
-    def->tooltip    = L("Grades the Gyroid and TPMS infill inside the object: its cells grow from the surface of the "
+    def->tooltip    = L("Disabled keeps the base infill density constant. Voronoi uses these modes to grade point density: Distance warp, Smooth blend and Stepped shells give the same continuous wall-depth profile; Lobes and Normal X/Y/Z use their respective lobe or section profiles. Voronoi does not warp coordinates or blend periodic lattices.\n"
+                        "Grades the Gyroid and TPMS infill inside the object: its cells grow from the surface of the "
                         "object towards its center. The sparse infill density is used at the surface and the interior "
                         "density at the center.\n"
                         "Distance warp, Smooth blend and Stepped shells follow the distance to the nearest surface, "
@@ -3708,7 +3720,7 @@ void PrintConfigDef::init_fff_params()
     def             = this->add("adaptive_infill_interior_density", coPercent);
     def->label      = L("Interior density");
     def->category   = L("Strength");
-    def->tooltip    = L("Density of the adaptive infill at the center of the object.");
+    def->tooltip    = L("Interior density for adaptive infill. Distance modes reach this density at the deepest point of each connected body; Lobes and Normal modes reach it at their lobe or section centers.");
     def->sidetext   = "%";
     def->min        = 1;
     def->max        = 100;
@@ -3718,7 +3730,7 @@ void PrintConfigDef::init_fff_params()
     def             = this->add("adaptive_infill_gradient", coEnum);
     def->label      = L("Adaptive gradient");
     def->category   = L("Strength");
-    def->tooltip    = L("How the density changes from the surface to the center of the object.\n"
+    def->tooltip    = L("How the density changes from the surface to the interior. Distance modes use depth within each connected body; Lobes and Normal modes use depth towards their lobe or section centers.\n"
                         "Linear: the density changes at a constant rate.\n"
                         "Quadratic: the density stays close to the sparse infill density near the surface and "
                         "changes faster towards the center.\n"
@@ -3747,6 +3759,75 @@ void PrintConfigDef::init_fff_params()
                         "buckling resistance. Filament use is preserved. No effect at ~30% sparse infill "
                         "density and above. Only applies when Sparse infill pattern is set to Gyroid.");
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("voronoi_cloud_method", coEnum);
+    def->label = L("Voronoi point cloud");
+    def->category = L("Strength");
+    def->tooltip = L("Random places independent points according to local density. FCC and Cubic use lattices with a vertical body diagonal, thinning points with a three-dimensional ordered dither to follow local density. Sparse infill direction rotates the cloud around Z. Cubic is preferable for steeper walls: its complete lattice gives faces about 55 degrees above horizontal, versus about 35 degrees for FCC, below the usual 45-degree guideline. Thinning can produce shallower faces; no method guarantees self-supporting infill. High Voronoi material density can require substantial memory; consider Fill Multiline for thicker walls with fewer cells.");
+    def->enum_keys_map = &ConfigOptionEnum<VoronoiCloudMethod>::get_enum_values();
+    def->enum_values = {"random", "fcc", "cubic"};
+    def->enum_labels = {L("Random"), L("FCC"), L("Cubic")};
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<VoronoiCloudMethod>(VoronoiCloudMethod::Random));
+
+    def = this->add("voronoi_relaxation_iterations", coInt);
+    def->label = L("Voronoi relaxation iterations");
+    def->category = L("Strength");
+    def->tooltip = L("Spring-relax the three-dimensional control points to balance Delaunay edge lengths according to local density. Zero disables relaxation. Try 3 to 5 iterations initially; more iterations increase preparation time.");
+    def->min = 0;
+    def->max = Voronoi::RelaxedPointCloud::maximum_iterations;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("voronoi_hull_threshold", coPercent);
+    def->label = L("Voronoi hull density threshold");
+    def->category = L("Strength");
+    def->tooltip = L("Remove control points below this absolute material density, then attempt to break large shallow faces by inserting support points, including inside the cleared region. Zero disables the experiment. Refinement targets faces below 35 degrees spanning more than 10 mm and is limited to 256 inserted points; it does not guarantee printable vaulting.");
+    def->sidetext = "%";
+    def->min = 0.;
+    def->max = 100.;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(0.));
+
+    def = this->add("voronoi_snap_to_wall", coBool);
+    def->label = L("Voronoi snap points to walls");
+    def->category = L("Strength");
+    def->tooltip = L("Move control points within half of nominal point spacing towards the model boundary. Uses the approximate raw wall-distance field, after optional relaxation. Interior and exterior points can snap; density and inner-hull settings are unchanged.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("voronoi_trace_shell", coBool);
+    def->label = L("Voronoi trace model shell");
+    def->category = L("Strength");
+    def->tooltip = L("Add one infill bead along the inside of the model shell and connect touching Voronoi walls to it. Junction turns vary between layers. Adds material along the shell; modifier boundaries are not traced.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("infill_modifier_blend", coFloat);
+    def->label = L("Material density blend width");
+    def->category = L("Strength");
+    def->tooltip = L("For material-density modifiers: -1 keeps Orca's separate infill regions. Zero merges material density into the parent's infill density field. A positive width blends smoothly inside the modifier, reaching its density at this depth. Only surface and interior density, gradient, blend width and corner smoothing apply while fusion is enabled; other overrides are inactive and are restored when the width returns to -1. The parent's infill pattern, multiline and other settings are retained. High Voronoi material density can require substantial memory; consider Fill Multiline for thicker walls with fewer cells.");
+    def->sidetext = L("mm");
+    def->min = -1.;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(-1.));
+
+    def = this->add("infill_slice_slab_distances", coBool);
+    def->label = L("Slice-slab infill distances");
+    def->category = L("Strength");
+    def->tooltip = L("For this object, compute three-dimensional wall distances from every sliced layer instead of voxel-plane samples. This preserves features between grid planes, but uses more memory and may take longer. Normal X/Y/Z profiles retain their planar voxel calculation. Disable to use the voxel backend.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("infill_smoothing_sigma", coFloat);
+    def->label = L("Corner smoothing sigma");
+    def->category = L("Strength");
+    def->tooltip = L("Gaussian standard deviation for the wall-distance field. Larger values extend the corner density boost over a wider area. Zero disables smoothing. The filter extends to three times this distance.");
+    def->sidetext = L("mm");
+    def->min = 0.;
+    def->max = InfillDensityField::maximum_smoothing_sigma;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
 
     def = this->add("sparse_infill_pattern", coEnum);
     def->label = L("Sparse infill pattern");
@@ -9659,6 +9740,8 @@ void PrintConfigDef::init_sla_params()
 
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
 {
+    if (opt_key == "voronoi_smoothing_sigma") opt_key = "infill_smoothing_sigma";
+    if (opt_key == "voronoi_modifier_blend") opt_key = "infill_modifier_blend";
     //BBS: handle legacy options
     if (opt_key == "curr_bed_type" && value == "SuperTack Plate") {
         value = "Supertack Plate";
@@ -9910,7 +9993,7 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
     // Ignore the following obsolete configuration keys:
     static std::set<std::string> ignore = {
         "acceleration", "scale", "rotate", "duplicate", "duplicate_grid",
-        "bed_size",
+        "bed_size", "adaptive_infill_distance",
         "print_center", "g0", "wipe_tower_per_color_wipe", 
         "support_sharp_tails","support_remove_small_overhangs", "support_with_sheath",
         "tree_support_collision_resolution", "tree_support_with_infill",

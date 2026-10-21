@@ -17,6 +17,7 @@
 #define slic3r_PrintConfig_hpp_
 
 #include "Point.hpp"
+#include "VoronoiCloudMethod.hpp"
 #include "libslic3r.h"
 #include "CommonDefs.hpp"
 #include "Config.hpp"
@@ -95,11 +96,13 @@ enum class TopSurfaceExpansionDirection {
     Outward,
 };
 
+
 enum class CenterOfSurfacePattern {
     Each_Surface,
     Each_Model,
     Each_Assembly,
 };
+
 
 enum class NoiseType {
     Classic,
@@ -174,7 +177,7 @@ inline bool is_separable_infill_pattern(InfillPattern pattern)
 // Orca: Infill patterns laid out by an octree, which each connected body always gets of its own.
 inline bool is_octree_infill_pattern(InfillPattern pattern) { return pattern == ipAdaptiveCubic || pattern == ipSupportCubic; }
 // Orca: Infill patterns graded by the "adaptive_infill_mode" option.
-inline bool is_adaptive_infill_pattern(InfillPattern pattern) { return pattern == ipGyroid || pattern == ipTpmsD || pattern == ipTpmsFK; }
+inline bool is_adaptive_infill_pattern(InfillPattern pattern) { return pattern == ipVoronoi || pattern == ipGyroid || pattern == ipTpmsD || pattern == ipTpmsFK; }
 
 // Orca: Infill patterns that round their corners by the "sparse_infill_smooth_factor" option.
 // Grid, Triangles and Tri-hexagon only do so in their trapezoidal form, which is generated with more
@@ -292,6 +295,7 @@ enum class AdaptiveInfillMode {
     NormalX,
     Count,
 };
+
 
 // Orca: how the adaptive infill density changes from the object surface to its deepest point.
 enum class AdaptiveInfillGradient {
@@ -787,6 +791,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(TopSurfaceExpansionDirection)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NoiseType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(VoronoiCloudMethod)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InfillPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(IroningType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SlicingMode)
@@ -1280,6 +1285,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Force the generation of solid shells between adjacent materials/volumes.
     ((ConfigOptionBool,                interface_shells))
     ((ConfigOptionFloat,               layer_height))
+    ((ConfigOptionBool,                infill_slice_slab_distances))
     ((ConfigOptionFloat,               mmu_segmented_region_max_width))
     ((ConfigOptionFloat,               mmu_segmented_region_interlocking_depth))
     ((ConfigOptionFloat,               raft_contact_distance))
@@ -1463,6 +1469,13 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionString,               sparse_infill_rotate_template))
     ((ConfigOptionPercent,              sparse_infill_density))
     ((ConfigOptionEnum<InfillPattern>,  sparse_infill_pattern))
+    ((ConfigOptionEnum<VoronoiCloudMethod>, voronoi_cloud_method))
+    ((ConfigOptionInt,                  voronoi_relaxation_iterations))
+    ((ConfigOptionBool,                 voronoi_snap_to_wall))
+    ((ConfigOptionPercent,              voronoi_hull_threshold))
+    ((ConfigOptionBool,                 voronoi_trace_shell))
+    ((ConfigOptionFloat,                infill_modifier_blend))
+    ((ConfigOptionFloat,                infill_smoothing_sigma))
     ((ConfigOptionPercent,              sparse_infill_smooth_factor))
     ((ConfigOptionFloat,                lateral_lattice_angle_1))
     ((ConfigOptionFloat,                lateral_lattice_angle_2))

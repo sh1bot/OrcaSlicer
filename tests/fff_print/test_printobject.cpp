@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include <catch2/catch_all.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -8,6 +9,7 @@
 #include <catch2/catch_message.hpp>
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/Exception.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/ClipperUtils.hpp"
@@ -722,6 +724,34 @@ TEST_CASE("Z contouring follows the surface of each instance as it is turned", "
     }
 }
 
+TEST_CASE("Fused density modifiers validate parent eligibility before slicing", "[PrintObject][Voronoi][Regression]")
+{
+    const std::string pattern = GENERATE("voronoi", "grid");
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", pattern}, {"sparse_infill_density", "15%"}});
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({make_cube(20., 20., 4.)}, print, model, config);
+    auto *modifier = model.objects.front()->add_volume(make_cube(10., 10., 4.), ModelVolumeType::PARAMETER_MODIFIER, false);
+    modifier->config.set_key_value("infill_modifier_blend", new ConfigOptionFloat(2.));
+    modifier->config.set_key_value("sparse_infill_density", new ConfigOptionPercent(30.));
+    print.apply(model, config);
+    const auto result = print.validate();
+    if (pattern == "grid") {
+        REQUIRE_FALSE(result.string.empty());
+        REQUIRE(result.object != nullptr);
+        REQUIRE(result.object->id() == modifier->id());
+        REQUIRE(result.opt_key == "infill_modifier_blend");
+    } else {
+        REQUIRE(result.string.empty());
+        REQUIRE_NOTHROW(print.process());
+        const PrintObject &object = *print.objects().front();
+        const auto settings = object.voronoi_cloud_settings(object.printing_region(0));
+        const auto provider = object.voronoi_point_cloud(settings);
+        REQUIRE(object.voronoi_point_cloud(settings) == provider);
+    }
+}
+
 TEST_CASE("Voronoi bridge anchoring uses the configured extrusion flow", "[PrintObject][Voronoi][Regression]")
 {
     Print print;
@@ -739,4 +769,34 @@ TEST_CASE("Voronoi bridge anchoring uses the configured extrusion flow", "[Print
         has_anchors |= !anchors.empty();
     }
     REQUIRE(has_anchors);
+}
+
+TEST_CASE("Voronoi preserves the selected adaptive spatial mode", "[PrintObject][Voronoi][Regression]")
+{
+    const std::string mode = GENERATE("disabled", "distance_warp", "smooth_blend", "stepped_shells", "lobes", "normal_z", "normal_y", "normal_x");
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", "voronoi"}, {"sparse_infill_density", "15%"},
+        {"adaptive_infill_mode", mode}, {"adaptive_infill_interior_density", "5%"}, {"infill_smoothing_sigma", "0"}});
+    Print print;
+    Model model;
+    init_print({cube(10)}, print, model, config);
+    const auto settings = print.objects().front()->voronoi_cloud_settings(print.objects().front()->printing_region(0));
+    REQUIRE(settings.density.mode == config.opt_enum<AdaptiveInfillMode>("adaptive_infill_mode"));
+    REQUIRE_THAT(settings.density.material_density, Catch::Matchers::WithinAbs(0.15, 1e-12));
+    REQUIRE_THAT(settings.density.interior_density, Catch::Matchers::WithinAbs(0.05, 1e-12));
+}
+
+TEST_CASE("Only physical-distance infill features request exterior distances", "[PrintObject][Voronoi]")
+{
+    const auto [pattern, mode, sigma, needed] = GENERATE(table<std::string, std::string, double, bool>({
+        {"gyroid", "smooth_blend", 0., false}, {"gyroid", "smooth_blend", 4., true},
+        {"gyroid", "normal_z", 4., false}, {"voronoi", "disabled", 0., false},
+        {"voronoi", "disabled", 4., true}, {"voronoi", "smooth_blend", 0., true}}));
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", pattern}, {"adaptive_infill_mode", mode},
+        {"sparse_infill_density", "15%"}, {"infill_smoothing_sigma", sigma}});
+    Print print;
+    Model model;
+    init_print({cube(10)}, print, model, config);
+    REQUIRE(print.objects().front()->needs_signed_infill_distances() == needed);
 }
