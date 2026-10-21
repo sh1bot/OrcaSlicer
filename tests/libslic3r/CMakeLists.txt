@@ -40,14 +40,19 @@ add_executable(${_TEST_NAME}_tests
     test_fill_corner_smoothing.cpp
     test_filament_mixer.cpp
     test_fill_plane_path.cpp
+    test_adaptive_infill_distance.cpp
     test_adaptive_infill_field.cpp
+    test_adaptive_infill_slice_slabs.cpp
+    test_fill_tpms_density.cpp
     test_fill_voronoi.cpp
     test_fill_voronoi_surface.cpp
+    test_fill_voronoi_void.cpp
     test_geometry.cpp
     test_kdtree.cpp
     test_imex_arrange.cpp
     test_imex_helpers.cpp
     test_imex_zones.cpp
+    test_infill_density_field.cpp
     test_multimaterial_segmentation.cpp
     test_placeholder_parser.cpp
     test_png_read_write.cpp

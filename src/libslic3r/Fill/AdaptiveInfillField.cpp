@@ -1,10 +1,12 @@
 #include "AdaptiveInfillField.hpp"
+#include <memory>
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <limits>
@@ -29,29 +31,8 @@
 namespace Slic3r {
 
 namespace {
-
-// At most 4 MB of body indices; finer cells would not change the grading.
-constexpr double MaxNodes    = double(1 << 20);
-constexpr double MinCellSize = 0.5;
-
-// Two deepest points are in separate lobes when the depth between them drops below this ratio of the shallower one.
-constexpr double NeckRatio = 0.8;
-// Lobes shallower than this ratio of the deepest one of their body are graded as part of it.
-constexpr double MinLobeRatio = 0.3;
-// A lobe reaches twice as far as the side towards its neighbour, so that the side is half way to the surface.
-constexpr double LobeReach = 2.;
-// Width of the morph between the patterns of two lobes, in their distance to the center over its depth.
-constexpr double LobeMorph = 0.1;
-// Densities of the levels of Stepped shells, and of Smooth blend, are at most these ratios apart. Fewer levels blend
-// with fewer lines running along the blends.
-constexpr double ShellRatio = 1.5;
-constexpr double BlendRatio = 2.5;
-// Distance warp: samples of the mean depth along a ray.
-constexpr int Samples = 32;
-
-constexpr float  InfF = std::numeric_limits<float>::infinity();
+constexpr float InfF = std::numeric_limits<float>::infinity();
 constexpr double InfD = std::numeric_limits<double>::infinity();
-
 // Squared distance transform of a line (Felzenszwalb & Huttenlocher); infinite samples are no sites.
 void distance_transform_line(const float *f, float *d, int n, int *v, double *s)
 {
@@ -145,15 +126,31 @@ void rasterize(const ExPolygons &expolygons, const Vec2d &origin, double cell, i
     }
 }
 
-// Scale of the pattern relative to the surface at a depth from 0 at the surface to 1 at the deepest point.
-double target_scale(double ratio, AdaptiveInfillGradient gradient, double depth)
+void report(const AdaptiveInfillDistanceField::Progress &progress, AdaptiveInfillDistanceField::Stage stage, double fraction)
 {
-    switch (gradient) {
-    case AdaptiveInfillGradient::Quadratic: return 1. + (ratio - 1.) * depth * depth;
-    case AdaptiveInfillGradient::Exponential: return std::pow(ratio, depth);
-    default: return 1. + (ratio - 1.) * depth;
-    }
+    if (progress) progress(stage, fraction);
 }
+
+// At most 4 MB of body indices; finer cells would not change the grading.
+constexpr double MaxNodes    = double(1 << 20);
+constexpr double MinCellSize = 0.5;
+
+// Two deepest points are in separate lobes when the depth between them drops below this ratio of the shallower one.
+constexpr double NeckRatio = 0.8;
+// Lobes shallower than this ratio of the deepest one of their body are graded as part of it.
+constexpr double MinLobeRatio = 0.3;
+// A lobe reaches twice as far as the side towards its neighbour, so that the side is half way to the surface.
+constexpr double LobeReach = 2.;
+// Width of the morph between the patterns of two lobes, in their distance to the center over its depth.
+constexpr double LobeMorph = 0.1;
+// Densities of the levels of Stepped shells, and of Smooth blend, are at most these ratios apart. Fewer levels blend
+// with fewer lines running along the blends.
+constexpr double ShellRatio = 1.5;
+constexpr double BlendRatio = 2.5;
+// Distance warp: samples of the mean depth along a ray.
+constexpr int Samples = 32;
+
+
 
 // Levels of Stepped shells and Smooth blend, geometric from the surface at 0 to the interior at count, and the
 // continuous level of the target of a depth.
@@ -166,7 +163,7 @@ struct DensityLevels
     double scale(int level) const { return count == 0 ? 1. : std::pow(ratio, double(level) / count); }
     double level(double depth) const
     {
-        return count == 0 ? 0. : count * std::log(target_scale(ratio, gradient, depth)) / std::log(ratio);
+        return count == 0 ? 0. : count * std::log(adaptive_density_scale(ratio, gradient, depth)) / std::log(ratio);
     }
 
     double               ratio;
@@ -183,7 +180,7 @@ public:
     RadialScale(const AdaptiveTpms &tpms, int dimensions) : m_dimensions(dimensions)
     {
         const double ratio  = std::max(tpms.interior_frequency / tpms.surface_frequency, 1e-3);
-        auto         target = [&tpms, ratio](double depth) { return target_scale(ratio, tpms.gradient, depth); };
+        auto         target = [&tpms, ratio](double depth) { return adaptive_density_scale(ratio, tpms.gradient, depth); };
         m_scale[0]    = target(1.);
         double volume = 0.;
         for (size_t i = 1; i < m_scale.size(); ++i) {
@@ -212,38 +209,126 @@ private:
 
 } // namespace
 
+AdaptiveInfillDistanceField::AdaptiveInfillDistanceField(const std::vector<Slice> &slices, const BoundingBox &bbox,
+    const std::function<void()> &throw_if_canceled, const Progress &progress, bool signed_distances, int normal_axis, Method method)
+    : m_method(normal_axis < 0 ? method : Method::Voxel), m_signed(signed_distances)
+{
+    if (m_method == Method::SliceSlabs) {
+        build_slice_slabs(slices, bbox, throw_if_canceled, progress);
+        return;
+    }
+    BoundingBox bounds = bbox;
+    if (!bounds.defined)
+        for (const auto &slice : slices) bounds.merge(get_extents(*slice.expolygons));
+    if (slices.empty() || !bounds.defined) return;
+    const auto cancel = [&] { if (throw_if_canceled) throw_if_canceled(); };
+    report(progress, Stage::Distance, 0.);
+    const Vec3d minimum(unscaled(bounds.min.x()), unscaled(bounds.min.y()), slices.front().bottom_z);
+    const Vec3d extent = Vec3d(unscaled(bounds.max.x()), unscaled(bounds.max.y()), slices.back().top_z) - minimum;
+    spacing = std::max(MinCellSize, std::cbrt(extent.prod() / MaxNodes));
+    const auto nodes = [&](double length) { return size_t(std::ceil(length / spacing)) + 3; };
+    while (double(nodes(extent.x())) * nodes(extent.y()) * nodes(extent.z()) > MaxNodes) spacing *= 1.1;
+    size = {nodes(extent.x()), nodes(extent.y()), nodes(extent.z())};
+    origin = minimum - Vec3d::Constant(spacing);
+    const Vec3i32 grid_size{int(size[0]), int(size[1]), int(size[2])};
+    const size_t plane = size[0] * size[1], count = plane * size[2];
+    auto &depth = original->squared;
+    depth.assign(count, 0.f);
+    tbb::parallel_for(tbb::blocked_range<int>(0, grid_size.z()), [&](const tbb::blocked_range<int> &range) {
+        for (int k = range.begin(); k < range.end(); ++k) {
+            const double z = origin.z() + k * spacing;
+            const auto it = std::lower_bound(slices.begin(), slices.end(), z, [](const Slice &slice, double z) { return slice.top_z < z; });
+            if (it != slices.end() && z > it->bottom_z)
+                rasterize(*it->expolygons, origin.head<2>(), spacing, grid_size.x(), grid_size.y(), depth.data() + size_t(k) * plane);
+        }
+        cancel();
+    });
+    report(progress, Stage::Distance, 0.2);
+    original->inside.assign((count + 7) / 8, 0);
+    std::vector<float> outside(signed_distances ? count : 0);
+    for (size_t i = 0; i < count; ++i) {
+        if (depth[i] == InfF) original->inside[i / 8] |= uint8_t(1) << (i % 8);
+        if (signed_distances) outside[i] = depth[i] == InfF ? 0.f : InfF;
+    }
+    for (int axis = 0; axis < 3; ++axis) {
+        if (axis != normal_axis) {
+            distance_transform_axis(depth, grid_size, axis, cancel);
+            if (signed_distances) distance_transform_axis(outside, grid_size, axis, cancel);
+        }
+        report(progress, Stage::Distance, std::min(1., 0.2 + 0.8 * (axis + 1) / 3.));
+    }
+    if (signed_distances)
+        for (size_t i = 0; i < count; ++i) if (!is_inside(i)) depth[i] = outside[i];
+    report(progress, Stage::Complete, 1.);
+    return;
+}
+
+
+AdaptiveInfillDistanceField::Interpolation AdaptiveInfillDistanceField::interpolation(const Vec3d &point) const
+{
+    Interpolation result;
+    if (empty()) return result;
+    const Vec3d coordinate = (point - origin) / spacing;
+    const Vec3d upper(double(size[0] - 1), double(size[1] - 1), double(size[2] - 1));
+    const Vec3d clamped = coordinate.cwiseMax(Vec3d::Zero()).cwiseMin(upper);
+    std::array<size_t, 3> low;
+    Vec3d fraction;
+    for (int axis = 0; axis < 3; ++axis) {
+        low[axis] = std::min(size_t(std::floor(clamped[axis])), size[axis] - 2);
+        fraction[axis] = clamped[axis] - low[axis];
+    }
+    size_t i = 0;
+    for (size_t z = 0; z < 2; ++z)
+        for (size_t y = 0; y < 2; ++y)
+            for (size_t x = 0; x < 2; ++x, ++i) {
+                result.indices[i] = ((low[2] + z) * size[1] + low[1] + y) * size[0] + low[0] + x;
+                result.weights[i] = (x ? fraction.x() : 1. - fraction.x()) *
+                    (y ? fraction.y() : 1. - fraction.y()) * (z ? fraction.z() : 1. - fraction.z());
+            }
+    result.outside = (coordinate - clamped).norm() * spacing;
+    return result;
+}
+
+double AdaptiveInfillDistanceField::sample(const Interpolation &where) const
+{
+    if (empty()) return far_distance;
+    double distance = 0.;
+    for (size_t i = 0; i < 8; ++i) distance += node_value(where.indices[i]) * where.weights[i];
+    return where.outside > 0. ? std::min(far_distance, std::hypot(std::max(0., distance), where.outside)) : distance;
+}
+
+std::vector<double> AdaptiveInfillDistanceField::sample(const std::vector<Vec3d> &points) const
+{
+    std::vector<double> result;
+    result.reserve(points.size());
+    for (const Vec3d &point : points) result.push_back(sample(interpolation(point)));
+    return result;
+}
+
 AdaptiveInfillField::AdaptiveInfillField(const std::vector<Slice> &slices, const BoundingBox &bbox, AdaptiveInfillMode mode,
-                                 const std::function<void()> &throw_if_canceled)
+                                 const std::function<void()> &throw_if_canceled, std::shared_ptr<const AdaptiveInfillDistanceField> distances)
     : m_mode(mode)
     , m_axis(mode == AdaptiveInfillMode::NormalX ? 0 : mode == AdaptiveInfillMode::NormalY ? 1 : mode == AdaptiveInfillMode::NormalZ ? 2 : -1)
 {
-    assert(!slices.empty() && mode != AdaptiveInfillMode::Disabled);
-    const Vec3d min(unscaled(bbox.min.x()), unscaled(bbox.min.y()), slices.front().bottom_z);
-    const Vec3d extent = Vec3d(unscaled(bbox.max.x()), unscaled(bbox.max.y()), slices.back().top_z) - min;
+    assert(mode != AdaptiveInfillMode::Disabled);
+    if (slices.empty() || !bbox.defined) {
+        m_distances = distances ? std::move(distances) : std::make_shared<AdaptiveInfillDistanceField>();
+        return;
+    }
 
-    // Padded by a node on each side, so that the border of the grid is outside.
-    m_cell     = std::max(MinCellSize, std::cbrt(extent.prod() / MaxNodes));
-    auto nodes = [this](double length) { return int(std::ceil(length / m_cell)) + 3; };
-    while (double(nodes(extent.x())) * nodes(extent.y()) * nodes(extent.z()) > MaxNodes)
-        m_cell *= 1.1;
-    m_size   = Vec3i32(nodes(extent.x()), nodes(extent.y()), nodes(extent.z()));
-    m_origin = min - Vec3d::Constant(m_cell);
-
-    const size_t       sy = size_t(m_size.x());
-    const size_t       sz = sy * m_size.y();
+    if (!distances) distances = std::make_shared<AdaptiveInfillDistanceField>(slices, bbox, throw_if_canceled, AdaptiveInfillDistanceField::Progress{}, false, m_axis);
+    m_distances = std::move(distances);
+    if (slices.empty() || !bbox.defined || m_distances->empty()) return;
+    m_cell = m_distances->grid_spacing();
+    m_origin = m_distances->grid_origin();
+    const auto &size = m_distances->grid_size();
+    m_size = Vec3i32(int(size[0]), int(size[1]), int(size[2]));
+    const size_t sy = size_t(m_size.x()), sz = sy * m_size.y();
     std::vector<float> depth(sz * m_size.z(), 0.f);
-    tbb::parallel_for(tbb::blocked_range<int>(0, m_size.z()), [&](const tbb::blocked_range<int> &range) {
-        for (int k = range.begin(); k < range.end(); ++k) {
-            const double z  = m_origin.z() + k * m_cell;
-            auto         it = std::lower_bound(slices.begin(), slices.end(), z, [](const Slice &s, double z) { return s.top_z < z; });
-            if (it != slices.end() && z > it->bottom_z)
-                rasterize(*it->expolygons, m_origin.head<2>(), m_cell, m_size.x(), m_size.y(), depth.data() + k * sz);
-        }
-        throw_if_canceled();
-    });
-    for (int axis = 0; axis < 3; ++axis)
-        if (axis != m_axis)
-            distance_transform_axis(depth, m_size, axis, throw_if_canceled);
+    for (size_t i = 0; i < depth.size(); ++i) {
+        if (i % 65536 == 0) throw_if_canceled();
+        depth[i] = m_distances->squared_depth(i);
+    }
 
     auto position = [this, sy, sz](size_t i) {
         return Vec3d(m_origin + m_cell * Vec3d(double(i % sy), double(i / sy % m_size.y()), double(i / sz)));
@@ -672,6 +757,21 @@ struct AdaptiveTpmsField
                 const double frequency = tpms.surface_frequency * levels.scale(level);
                 return tpms.equation(float(frequency * x), float(frequency * y), float(frequency * z));
             };
+            if (tpms.frequency_at) {
+                const double frequency = tpms.frequency_at(obj);
+                if (!(frequency > 0.)) return -1.f;
+                // Extend the same fixed lattice levels beyond the root's density range.
+                // A uniform root still needs levels for reinforced/modifier densities.
+                const double step = levels.count == 0 ? std::log(BlendRatio) : std::log(levels.ratio) / levels.count;
+                const double c = std::log(frequency / tpms.surface_frequency) / step;
+                const double k = std::floor(c), u = c - k;
+                const double w = u * u * (3. - 2. * u);
+                const auto value = [&](double level) {
+                    const double f = tpms.surface_frequency * std::exp(step * level);
+                    return tpms.equation(float(f * x), float(f * y), float(f * z));
+                };
+                return float((1. - w) * value(k) + w * value(k + 1.));
+            }
             if (levels.count == 0)
                 return lattice(0);
             const double c = std::clamp(levels.level(radial_field.depth(obj)), 0., double(levels.count));

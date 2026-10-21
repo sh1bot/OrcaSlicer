@@ -23,14 +23,21 @@ public:
     double point_spacing = 0.;
     FillVoronoi(const FillVoronoi &other)
         : Fill(other), point_spacing(other.point_spacing), m_surface_boundary(other.m_surface_boundary), m_floor_support(other.m_floor_support),
-          m_infill(std::make_shared<VoronoiInfill>(*other.m_infill)) {}
+          m_shell_boundaries(other.m_shell_boundaries), m_infill(std::make_shared<VoronoiInfill>(*other.m_infill)) {}
     FillVoronoi &operator=(const FillVoronoi &other)
         { if (this != &other) *this = FillVoronoi(other); return *this; }
     FillVoronoi &operator=(FillVoronoi &&) = default;
-    void set_point_cloud(std::shared_ptr<const Voronoi::PointCloudProvider> provider)
-        { m_infill = std::make_shared<VoronoiInfill>(std::move(provider)); }
-    void set_engine_registry(VoronoiEngineRegistry &engines)
-        { if (!engines.infill) engines.infill = m_infill; m_infill = engines.infill; }
+    void set_point_cloud(std::shared_ptr<const Voronoi::PointCloudProvider> provider, VoronoiEngineRegistry *engines = nullptr)
+    {
+        if (engines) {
+            auto &engine = engines->by_provider[provider];
+            if (!engine) engine = std::make_shared<VoronoiInfill>(provider);
+            m_infill = engine;
+        } else {
+            m_infill = std::make_shared<VoronoiInfill>(std::move(provider));
+        }
+    }
+    void set_shell_boundaries(ExPolygons boundaries) { m_shell_boundaries = std::move(boundaries); }
     // Non-owning; the lower-layer footprints must outlive this filler and its clones.
     void set_floor_support(const ExPolygons *support) { m_floor_support = support; }
     Polylines fill_surface(const Surface *surface, const FillParams &params) override;
@@ -49,6 +56,7 @@ protected:
 private:
     ExPolygon m_surface_boundary;
     const ExPolygons *m_floor_support = nullptr;
+    ExPolygons m_shell_boundaries;
     std::shared_ptr<VoronoiInfill> m_infill = std::make_shared<VoronoiInfill>();
 };
 

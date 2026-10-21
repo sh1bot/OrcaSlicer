@@ -4,6 +4,7 @@
 #include "DeviceCore/DevConfigUtil.h"
 #include "format.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/InfillDensityModifier.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/MaterialType.hpp"
@@ -846,14 +847,26 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     // The sparse infill density is the surface density of the adaptive infill; at 100% the infill is solid.
     bool have_adaptive_infill_pattern = have_infill && config->option<ConfigOptionPercent>("sparse_infill_density")->value < 100 &&
                             is_adaptive_infill_pattern(pattern);
-    toggle_line("adaptive_infill_mode", have_adaptive_infill_pattern);
-    bool have_adaptive_infill = have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
-    toggle_line("adaptive_infill_interior_density", have_adaptive_infill);
-    toggle_line("adaptive_infill_gradient", have_adaptive_infill);
+    const bool voronoi_infill = have_infill && pattern == ipVoronoi;
+    const bool shared_density_infill = voronoi_infill || (!is_global_config && fused_density_modifier(*config));
+    toggle_line("adaptive_infill_mode", have_adaptive_infill_pattern || shared_density_infill);
+    bool have_adaptive_infill_mode = have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
+    const bool shared_density_adaptive = shared_density_infill && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
+    toggle_line("adaptive_infill_interior_density", have_adaptive_infill_mode || shared_density_adaptive);
+    toggle_line("adaptive_infill_gradient", have_adaptive_infill_mode || shared_density_adaptive);
 
     // gyroid_optimized only applies when the sparse infill pattern is gyroid without adaptive density;
     // hide the whole line otherwise.
-    toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid && !have_adaptive_infill);
+    toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid && !have_adaptive_infill_mode);
+    toggle_line("voronoi_cloud_method", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_relaxation_iterations", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_snap_to_wall", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_hull_threshold", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_trace_shell", have_infill && pattern == ipVoronoi);
+    toggle_line("infill_slice_slab_distances", have_infill && (shared_density_infill || have_adaptive_infill_mode));
+    toggle_line("infill_smoothing_sigma", have_infill && (shared_density_infill ||
+        (have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") == AdaptiveInfillMode::SmoothBlend)));
+
 
     // If there is infill, enable/disable fill_multiline according to whether the pattern supports multiline infill.
     if (have_infill) {
