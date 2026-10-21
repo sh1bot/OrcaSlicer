@@ -49,6 +49,7 @@ add_executable(${_TEST_NAME}_tests
     test_imex_arrange.cpp
     test_imex_helpers.cpp
     test_imex_zones.cpp
+    test_infill_density_field.cpp
     test_multimaterial_segmentation.cpp
     test_placeholder_parser.cpp
     test_png_read_write.cpp

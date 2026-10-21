@@ -1,16 +1,19 @@
-# Adaptive infill distances
+# Shared adaptive infill density
 
-`AdaptiveInfillDistanceField` retains the voxel distances used by
-`AdaptiveInfillField`. It exposes physical distances and interpolation weights
-for consumers needing a sampled distance field. Signed sampling is negative
-inside the object and positive outside.
+Voronoi uses Orca's common adaptive modes, interior density and gradient.
+Disabled gives a uniform cloud. Distance warp, Smooth blend and Stepped shells
+all select the same continuous wall-depth point density. Lobes and Normal X/Y/Z
+blend density contributions from neighbouring lobes or sections. These profiles
+change point selection without warping the cloud coordinates.
 
-Slices provide Orca's processed outlines, including floors, roofs and holes.
-The existing raster and separable distance transform compute interior costs.
-An optional exterior transform supplies signed samples without changing the
-interior costs or the existing adaptive depth, body and lobe profiles.
+Surface density is the sparse infill setting; interior density is an absolute
+percentage. Linear, Quadratic and Exponential use the existing adaptive gradient.
+Distance modes normalise depth to the deepest point of each connected body;
+Lobes and Normal modes use lobe and section centers.
 
-The grid starts at 0.5 mm spacing and coarsens to stay within about one million
-nodes. Narrow features smaller than a voxel may disappear. Physical samples are
-capped at 1000 mm. Construction reports progress and supports cancellation.
-The default interior-only calculation avoids the exterior transform.
+Density queries evaluate the selected upstream profile and gradient directly.
+There is no additional material-density grid. Adaptive geometry and point providers
+are cached by settings and shared across layer workers. Construction reports
+progress and supports cancellation.
+The voxel grid starts at 0.5 mm spacing and coarsens to stay within about one
+million nodes. Narrow features smaller than a voxel may disappear.

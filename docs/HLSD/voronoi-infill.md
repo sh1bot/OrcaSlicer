@@ -65,3 +65,9 @@ Ordering is local to each fill surface. Anchoring queries and extrusion use
 the same nominal region flow and cloud settings, so first-layer widths and
 adaptive layer heights do not move points.
 Layer completion reports throttled progress and checks cancellation.
+
+## Spatial density
+
+The [shared material-density field](infill-density.md) grades point density by
+wall depth or lobe/section profiles when Adaptive density is enabled. Disabled
+gives a uniform cloud without preparing a distance field.

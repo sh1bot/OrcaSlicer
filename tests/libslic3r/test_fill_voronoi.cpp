@@ -1,12 +1,13 @@
 #include <algorithm>
 #include <catch2/catch_all.hpp>
-#include <cstdint>
 #include <math.h>
 #include <tbb/parallel_for.h>
 
 #include "libslic3r/ExPolygon.hpp"
+#include "libslic3r/InfillDensityField.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Polyline.hpp"
+#include "libslic3r/PrintConfig.hpp"
 #include "catch2/catch_test_macros.hpp"
 #include "libslic3r/Fill/VoronoiPointCloud.hpp"
 #include "libslic3r/BoundingBox.hpp"
@@ -17,7 +18,11 @@
 #include "libslic3r/Fill/VoronoiInfillCgal.hpp"
 #include "libslic3r/Fill/VoronoiInfill.hpp"
 #include "libslic3r/Fill/VoronoiRouting.hpp"
+#include "libslic3r/Fill/VoronoiWallDistance.hpp"
+#include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/ClipperUtils.hpp"
+#include "libslic3r/EdgeGrid.hpp"
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -28,6 +33,8 @@
 #include <utility>
 #include <vector>
 #include <stdexcept>
+#include <cstdint>
+#include <future>
 
 using namespace Slic3r;
 
@@ -774,6 +781,154 @@ TEST_CASE("Voronoi finite empty clouds terminate without geometry", "[FillVorono
     REQUIRE(infill.fill_geometry(region.contour.bounding_box(), region, {0.45, 0.2, 0., 0.45, 0.}).walls.empty());
 }
 
+
+TEST_CASE("Voronoi wall thinning preserves reproducibility and site intensity", "[FillVoronoi]")
+{
+    auto constant = [](const std::vector<Vec3d> &points) { return std::vector<InfillDensitySample>(points.size(), {-6., adaptive_density_scale(0.01, AdaptiveInfillGradient::Exponential, 6. / 32.)}); };
+    Voronoi::PoissonPointCloud uniform;
+    Voronoi::WallDistancePointCloud thinned(constant);
+    const BoundingBoxf3 box(Vec3d(-20., -20., -20.), Vec3d(20., 20., 20.));
+    auto keys = [](const std::vector<Vec3d> &points) {
+        std::set<std::array<double, 3>> result;
+        for (const Vec3d &p : points) REQUIRE(result.insert({p.x(), p.y(), p.z()}).second);
+        return result;
+    };
+    const double maximum_ratio = 1.;
+    const auto source = keys(uniform.points_in(box, 1. / maximum_ratio));
+    const auto expected = keys(thinned.points_in(box, 1.));
+    REQUIRE_FALSE(expected.empty());
+    REQUIRE_THAT(double(expected.size()) / source.size(), Catch::Matchers::WithinRel(std::pow(adaptive_density_scale(0.01, AdaptiveInfillGradient::Exponential, 6. / 32.) / maximum_ratio, 3), 0.15));
+    for (const auto &point : expected) REQUIRE(source.count(point) == 1);
+    auto first = box, second = box;
+    first.max.z() = second.min.z() = 0.37;
+    auto points = thinned.points_in(second, 1.);
+    auto rest = thinned.points_in(first, 1.);
+    points.insert(points.end(), rest.begin(), rest.end());
+    REQUIRE(keys(points) == expected);
+}
+
+TEST_CASE("Voronoi wall cloud makes smaller cells near model walls", "[FillVoronoi]")
+{
+    const ExPolygons outlines {rectangle(-40., -40., 40., 40.)};
+    auto field = std::make_shared<InfillDensityField>(std::vector<WallSlice>{{-100., 100., &outlines}});
+    auto provider = std::make_shared<Voronoi::WallDistancePointCloud>([field](const auto &points) { return field->sample_fields(points); });
+    VoronoiInfill infill(provider);
+    const auto bounds = outlines.front().contour.bounding_box();
+    const auto walls = infill.fill_geometry(bounds, outlines.front(), {0.45, 0.25, 0., 0.45, 0.}).walls;
+    REQUIRE_FALSE(walls.empty());
+    const auto near_wall = rectangle(30., -30., 38., 30.);
+    const auto center = rectangle(-4., -30., 4., 30.);
+    REQUIRE(path_length(intersection_pl(walls, near_wall)) > path_length(intersection_pl(walls, center)));
+    REQUIRE(segments(infill.fill_geometry(bounds, outlines.front(), {0.45, 0.25, 5., 0.45, 0.}).walls) != segments(walls));
+    REQUIRE(segments(infill.fill_geometry(bounds, outlines.front(), {0.45, 0.25, 0., 0.45, 0.}).walls) == segments(walls));
+}
+
+TEST_CASE("Voronoi wall clouds become denser near both floors and roofs", "[FillVoronoi]")
+{
+    const ExPolygons outlines {rectangle(-50., -50., 50., 50.)};
+    auto field = std::make_shared<InfillDensityField>(std::vector<WallSlice>{{0., 50., &outlines}});
+    Voronoi::WallDistancePointCloud cloud([field](const auto &points) { return field->sample_fields(points); });
+    const BoundingBoxf3 bottom(Vec3d(-10., -10., 0.), Vec3d(10., 10., 5.));
+    const BoundingBoxf3 center(Vec3d(-10., -10., 22.5), Vec3d(10., 10., 27.5));
+    const BoundingBoxf3 top(Vec3d(-10., -10., 45.), Vec3d(10., 10., 50.));
+    const auto floor_points = cloud.points_in(bottom, 1.);
+    const auto center_points = cloud.points_in(center, 1.);
+    const auto roof_points = cloud.points_in(top, 1.);
+    REQUIRE(floor_points.size() > 3 * center_points.size());
+    REQUIRE(roof_points.size() > 3 * center_points.size());
+    REQUIRE(cloud.points_in(bottom, 1.) == floor_points);
+}
+
+TEST_CASE("Voronoi cloud setup is reused across parallel layers and resets on reslicing", "[FillVoronoi]")
+{
+    const ExPolygons outlines {rectangle(-20., -20., 20., 20.)};
+    std::atomic<size_t> loads {0};
+    const auto slices = [&] {
+        ++loads;
+        return std::vector<WallSlice>{{0., 20., &outlines}};
+    };
+    Voronoi::PointCloudSettings settings;
+    settings.density.mode = AdaptiveInfillMode::SmoothBlend;
+    Voronoi::WallDistanceCloudCache cache;
+    std::vector<std::future<std::shared_ptr<const Voronoi::PointCloudProvider>>> workers;
+    for (int i = 0; i < 8; ++i)
+        workers.push_back(std::async(std::launch::async, [&] { return cache.get(slices, settings); }));
+    const auto cloud = workers.front().get();
+    for (size_t i = 1; i < workers.size(); ++i) REQUIRE(workers[i].get() == cloud);
+    REQUIRE(cache.get(slices, settings) == cloud);
+    REQUIRE(loads == 1);
+    const BoundingBoxf3 region(Vec3d(-10., -10., 0.), Vec3d(10., 10., 3.));
+    const auto points = cloud->points_in(region, 4.);
+    REQUIRE_FALSE(points.empty());
+    cache.clear();
+    const auto regenerated = cache.get(slices, settings);
+    REQUIRE(regenerated != cloud);
+    REQUIRE(loads == 2);
+    REQUIRE(regenerated->points_in(region, 4.) == points);
+}
+
+
+
+
+
+
+TEST_CASE("Voronoi thinning samples prepared material density once per candidate", "[FillVoronoi]")
+{
+    size_t queried = 0;
+    Voronoi::WallDistancePointCloud cloud([&](const auto &points) {
+        queried += points.size();
+        return std::vector<InfillDensitySample>(points.size(), {-6., 0.5});
+    });
+    const BoundingBoxf3 box(Vec3d(-10., -10., -10.), Vec3d(10., 10., 10.));
+    const auto candidates = Voronoi::PoissonPointCloud().points_in(box, 3. / 1.);
+    cloud.points_in(box, 3.);
+    REQUIRE(queried == candidates.size());
+}
+
+
+
+
+TEST_CASE("Voronoi distance construction reports progress through completion", "[FillVoronoi]")
+{
+    const ExPolygons outlines{rectangle(0., 0., 20., 20.)};
+    auto previous_stage = WallDistanceStage::Distance;
+    double previous_fraction = 0.;
+    InfillDensityField field({{0., 20., &outlines}},
+        [&](WallDistanceStage stage, double fraction) {
+            REQUIRE(int(stage) >= int(previous_stage));
+            REQUIRE(fraction >= 0.);
+            REQUIRE(fraction <= 1.);
+            if (stage == previous_stage) REQUIRE(fraction >= previous_fraction);
+            previous_stage = stage;
+            previous_fraction = fraction;
+        });
+    REQUIRE(previous_stage == WallDistanceStage::Complete);
+    REQUIRE_THAT(previous_fraction, Catch::Matchers::WithinAbs(1., 1e-12));
+    REQUIRE(field.sample({Vec3d(10., 10., 10.)}).front() < 0.);
+}
+
+
+TEST_CASE("The candidate density bound covers both sparse interiors and dense walls", "[FillVoronoi][MaterialDensity]")
+{
+    const ExPolygons model {rectangle(-40., -40., 40., 40.)};
+    const bool adaptive = true;
+    const double density = 0.3;
+    InfillDensityField field({{-40., 40., &model}}, {}, adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, density);
+    std::vector<Vec3d> points;
+    for (int x = 0; x <= 40; ++x) points.emplace_back(x, 0., 0.);
+    const auto samples = field.sample_fields(points);
+    const double expected = 1.;
+    REQUIRE_THAT(field.maximum_density_ratio(), Catch::Matchers::WithinRel(expected, 1e-12));
+    REQUIRE(samples.front().density < samples.back().density);
+    for (const auto &sample : samples)
+        REQUIRE(field.maximum_density_ratio() >= sample.density - 1e-12);
+}
+
+
+
+
+
+
 TEST_CASE("Incremental Voronoi geometry agrees with fresh builds while the slab moves", "[FillVoronoi][Incremental]")
 {
     const auto provider = std::make_shared<Voronoi::PoissonPointCloud>();
@@ -831,6 +986,39 @@ TEST_CASE("Copied Voronoi networks own their storage through dimension changes",
     REQUIRE(contours(mesh).empty());
 }
 
+
+
+TEST_CASE("Voronoi prepared interior density is absolute and each connected body reaches it", "[FillVoronoi]")
+{
+    const ExPolygons model {rectangle(-50., -10., -30., 10.), rectangle(-10., -30., 50., 30.)};
+    const std::vector<WallSlice> slices {{0., 80., &model}};
+    const AdaptiveInfillField reference(slices, get_extents(model), AdaptiveInfillMode::SmoothBlend, [] {});
+    const std::vector<Vec3d> points {Vec3d(-40., 0., 40.), Vec3d(20., 0., 40.)};
+    for (double surface : {0.1, 0.25}) {
+        InfillDensityField field({{0., 80., &model}}, {}, AdaptiveInfillMode::SmoothBlend, surface);
+        const auto values = field.sample_fields(points);
+        for (size_t i = 0; i < points.size(); ++i) {
+            const double depth = reference.depth(points[i]);
+            REQUIRE(depth > 0.95);
+            const double expected = surface + (0.05 - surface) * depth;
+            REQUIRE_THAT(values[i].density * surface, Catch::Matchers::WithinAbs(expected, 0.002));
+        }
+    }
+}
+
+TEST_CASE("Voronoi material density follows TPMS depth when the model is scaled", "[FillVoronoi]")
+{
+    for (double half : {10., 30.}) {
+        const ExPolygons model {rectangle(-half, -half, half, half)};
+        InfillDensityField field({{0., 2. * half, &model}});
+        const auto values = field.sample_fields({Vec3d(0., 0., 0.), Vec3d(0., 0., half / 2.), Vec3d(0., 0., half)});
+        REQUIRE_THAT(values[0].density, Catch::Matchers::WithinRel(1., 0.04));
+        REQUIRE_THAT(values[1].density, Catch::Matchers::WithinRel(0.6, 0.04));
+        REQUIRE_THAT(values[2].density, Catch::Matchers::WithinRel(0.2, 0.04));
+    }
+}
+
+
 TEST_CASE("Unbounded empty Voronoi providers stop expanding and report worker errors", "[FillVoronoi]")
 {
     class EmptyProvider : public Voronoi::PointCloudProvider {
@@ -857,6 +1045,7 @@ TEST_CASE("Unbounded empty Voronoi providers stop expanding and report worker er
         return std::numeric_limits<double>::infinity();
     }));
 }
+
 
 TEST_CASE("Active cloud retains sites ingested above its current slab", "[FillVoronoi]")
 {
@@ -904,6 +1093,31 @@ TEST_CASE("Closed Voronoi trails scatter seams rather than advancing around the 
     }
     REQUIRE(starts.size() > 8);
     REQUIRE(largest_jump > 10000.);
+}
+
+TEST_CASE("Default Voronoi density keeps a uniform cloud without loading geometry", "[FillVoronoi][Regression]")
+{
+    Voronoi::WallDistanceCloudCache cache;
+    size_t loads = 0;
+    const auto provider = cache.get([&] { ++loads; return std::vector<WallSlice>{}; });
+    REQUIRE(loads == 0);
+    const BoundingBoxf3 box(Vec3d(-5., -5., 0.), Vec3d(5., 5., 10.));
+    REQUIRE(provider->points_in(box, 2.) == Voronoi::PoissonPointCloud().points_in(box, 2.));
+}
+
+TEST_CASE("Voronoi point providers cache each adaptive spatial mode independently", "[FillVoronoi][Regression]")
+{
+    const ExPolygons model {rectangle(-12., -8., 12., 8.)};
+    const auto slices = [&] { return std::vector<WallSlice>{{0., 20., &model}}; };
+    Voronoi::WallDistanceCloudCache cache;
+    Voronoi::PointCloudSettings settings;
+    settings.density.mode = AdaptiveInfillMode::NormalX;
+    const auto first = cache.get(slices, settings);
+    settings.density.mode = AdaptiveInfillMode::NormalY;
+    const auto second = cache.get(slices, settings);
+    REQUIRE(second != first);
+    settings.density.mode = AdaptiveInfillMode::NormalX;
+    REQUIRE(cache.get(slices, settings) == first);
 }
 
 TEST_CASE("Whole generation cubes are visited once and retired before the next batch", "[FillVoronoi][Incremental]")
@@ -986,6 +1200,24 @@ TEST_CASE("A wider slice slab does not reopen safely retired generation cells", 
         return 1.;
     }));
     REQUIRE(cloud.retired_below() >= cutoff);
+}
+
+TEST_CASE("Adaptive streaming never resamples rejected candidates", "[FillVoronoi][Incremental]")
+{
+    std::set<std::array<double, 3>> visited;
+    auto provider = std::make_shared<Voronoi::WallDistancePointCloud>([&](const auto &points) {
+        std::vector<InfillDensitySample> samples;
+        for (const auto &p : points) {
+            REQUIRE(visited.insert({p.x(), p.y(), p.z()}).second);
+            samples.push_back({-1., 0.5});
+        }
+        return samples;
+    }, 1.);
+    Voronoi::ActivePointCloud cloud(provider);
+    const auto bounds = rectangle(-2., -2., 2., 2.).contour.bounding_box();
+    for (double z = 0.; z < 20.; z += 0.2)
+        REQUIRE(cloud.update(bounds, z, 0., 2., [](const auto &) { return 1.; }));
+    REQUIRE_FALSE(visited.empty());
 }
 
 TEST_CASE("Active cloud uses the provider's generation cell size", "[FillVoronoi][Incremental]")

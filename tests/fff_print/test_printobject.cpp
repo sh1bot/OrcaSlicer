@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include <catch2/catch_all.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -739,4 +740,19 @@ TEST_CASE("Voronoi bridge anchoring uses the configured extrusion flow", "[Print
         has_anchors |= !anchors.empty();
     }
     REQUIRE(has_anchors);
+}
+
+TEST_CASE("Voronoi preserves the selected adaptive spatial mode", "[PrintObject][Voronoi][Regression]")
+{
+    const std::string mode = GENERATE("disabled", "distance_warp", "smooth_blend", "stepped_shells", "lobes", "normal_z", "normal_y", "normal_x");
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", "voronoi"}, {"sparse_infill_density", "15%"},
+        {"adaptive_infill_mode", mode}, {"adaptive_infill_interior_density", "5%"}});
+    Print print;
+    Model model;
+    init_print({cube(10)}, print, model, config);
+    const auto settings = print.objects().front()->voronoi_cloud_settings(print.objects().front()->printing_region(0));
+    REQUIRE(settings.density.mode == config.opt_enum<AdaptiveInfillMode>("adaptive_infill_mode"));
+    REQUIRE_THAT(settings.density.material_density, Catch::Matchers::WithinAbs(0.15, 1e-12));
+    REQUIRE_THAT(settings.density.interior_density, Catch::Matchers::WithinAbs(0.05, 1e-12));
 }

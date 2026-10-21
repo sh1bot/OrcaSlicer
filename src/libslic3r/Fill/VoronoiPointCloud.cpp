@@ -8,23 +8,37 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <cstdint>
 
 namespace Slic3r::Voronoi {
 namespace {
+
 uint64_t mix(uint64_t value)
 {
     value += 0x9e3779b97f4a7c15ULL;
     value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
     value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
     return value ^ (value >> 31);
+}
+
+double site_draw(const Vec3d &point)
+{
+    uint64_t seed = 0x57414c4c434c4f55ULL;
+    for (int axis = 0; axis < 3; ++axis) {
+        uint64_t bits;
+        static_assert(sizeof(bits) == sizeof(double));
+        std::memcpy(&bits, &point[axis], sizeof(bits));
+        seed = mix(seed ^ bits);
+    }
+    return double(seed >> 11) * (1. / 9007199254740992.);
 }
 
 bool contains(const BoundingBoxf3 &outer, const BoundingBoxf3 &inner)
@@ -47,16 +61,30 @@ double PoissonPointCloud::nominal_spacing(double s, double h, double density)
 
 std::vector<Vec3d> PoissonPointCloud::points_in(const BoundingBoxf3 &box, double spacing) const
 {
-    const double tile = 2. * spacing;
-    auto sites = points_in_cells((box.min / tile).array().floor().cast<int64_t>(),
-        (box.max / tile).array().ceil().cast<int64_t>(), spacing);
-    sites.erase(std::remove_if(sites.begin(), sites.end(), [&](const Vec3d &point) {
-        return (point.array() < box.min.array()).any() || (point.array() >= box.max.array()).any();
-    }), sites.end());
+    auto sites = candidates_in(box, spacing);
     return sites;
 }
 
 std::vector<Vec3d> PoissonPointCloud::points_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const
+{
+    auto sites = candidates_in_cells(first, last, spacing);
+    return sites;
+}
+
+std::vector<Vec3d> PoissonPointCloud::candidates_in(const BoundingBoxf3 &box, double spacing) const
+{
+    const auto source = generation_bounds(box);
+    const double tile = 2. * spacing;
+    auto sites = candidates_in_cells((source.min / tile).array().floor().cast<int64_t>(),
+        (source.max / tile).array().ceil().cast<int64_t>(), spacing);
+    sites.erase(std::remove_if(sites.begin(), sites.end(), [&](const Vec3d &point) {
+        const auto &position = point;
+        return (position.array() < box.min.array()).any() || (position.array() >= box.max.array()).any();
+    }), sites.end());
+    return sites;
+}
+
+std::vector<Vec3d> PoissonPointCloud::candidates_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const
 {
     const double tile = 2. * spacing;
     std::vector<Vec3d> sites;
@@ -79,6 +107,40 @@ std::vector<Vec3d> PoissonPointCloud::points_in_cells(const Vec3i64 &first, cons
                 }
             }
     return sites;
+}
+
+WallDistancePointCloud::WallDistancePointCloud(WallDistanceSamples samples, double maximum_ratio)
+    : m_samples(std::move(samples)), m_maximum_ratio(maximum_ratio)
+{
+    if (!m_samples || !std::isfinite(maximum_ratio) || maximum_ratio <= 0.)
+        throw std::invalid_argument("Invalid Voronoi material density field");
+}
+
+std::vector<Vec3d> WallDistancePointCloud::points_in(const BoundingBoxf3 &box, double spacing) const
+{
+    return thin(candidates_in(box, spacing / m_maximum_ratio));
+}
+
+std::vector<Vec3d> WallDistancePointCloud::points_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const
+{
+    return thin(candidates_in_cells(first, last, spacing / m_maximum_ratio));
+}
+
+std::vector<Vec3d> WallDistancePointCloud::thin(std::vector<Vec3d> candidates) const
+{
+    if (candidates.empty()) return {};
+    auto sites = candidates;
+    const auto samples = m_samples(sites);
+    if (samples.size() != sites.size()) throw std::invalid_argument("Invalid Voronoi material density samples");
+    std::vector<Vec3d> retained;
+    for (size_t i = 0; i < sites.size(); ++i) {
+        const double ratio = samples[i].density / m_maximum_ratio;
+        // In isotropic Poisson foam, infill density scales with lambda^(1/3).
+        // Hash coordinates rather than traversal order to preserve the field.
+        const double draw = site_draw(candidates[i]);
+        if (draw < ratio * ratio * ratio) retained.push_back(sites[i]);
+    }
+    return retained;
 }
 
 ActivePointCloud::ActivePointCloud(std::shared_ptr<const PointCloudProvider> provider) : m_provider(std::move(provider))

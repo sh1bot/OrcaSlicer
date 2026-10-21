@@ -151,9 +151,19 @@ private:
     std::vector<float> m_depth;
 };
 
-using AdaptiveInfillFieldPtr = std::unique_ptr<AdaptiveInfillField>;
+using AdaptiveInfillFieldPtr = std::shared_ptr<const AdaptiveInfillField>;
 // A field for every adaptive mode in use, indexed by the mode.
 using AdaptiveInfillFields = std::array<AdaptiveInfillFieldPtr, size_t(AdaptiveInfillMode::Count)>;
+
+// Relative density/frequency between the surface (depth 0) and interior (depth 1).
+inline double adaptive_density_scale(double ratio, AdaptiveInfillGradient gradient, double depth)
+{
+    switch (gradient) {
+    case AdaptiveInfillGradient::Quadratic: return 1. + (ratio - 1.) * depth * depth;
+    case AdaptiveInfillGradient::Exponential: return std::pow(ratio, depth);
+    default: return 1. + (ratio - 1.) * depth;
+    }
+}
 
 struct AdaptiveTpms
 {

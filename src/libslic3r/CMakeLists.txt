@@ -205,6 +205,8 @@ set(lisbslic3r_sources
     Fill/VoronoiPointCloud.hpp
     Fill/VoronoiRouting.cpp
     Fill/VoronoiRouting.hpp
+    Fill/VoronoiWallDistance.cpp
+    Fill/VoronoiWallDistance.hpp
     FilamentMixer.cpp
     FilamentMixer.hpp
     FilamentMixerModel.hpp
@@ -342,6 +344,8 @@ set(lisbslic3r_sources
     IMEXHelpers.hpp
     IMEXZones.cpp
     IMEXZones.hpp
+    InfillDensityField.cpp
+    InfillDensityField.hpp
     InstanceLock.cpp
     InstanceLock.hpp
     Int128.hpp

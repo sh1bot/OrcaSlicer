@@ -1,6 +1,8 @@
 #ifndef slic3r_Print_hpp_
 #define slic3r_Print_hpp_
 
+#include "InfillDensityField.hpp"
+#include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "Config.hpp"
 #include "Model.hpp"
 #include "Polygon.hpp"
@@ -13,6 +15,7 @@
 #include "Fill/FillAdaptive.hpp"
 #include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
+#include "Fill/VoronoiWallDistance.hpp"
 
 #include "BoundingBox.hpp"
 #include "ExtrusionEntityCollection.hpp"
@@ -32,6 +35,7 @@
 #include "BeltTransform.hpp"
 #include "ObjectID.hpp"
 #include "TriangleSelector.hpp"
+#include "libslic3r/Fill/VoronoiPointCloud.hpp"
 #include "libslic3r.h"
 
 #include <Eigen/Geometry>
@@ -453,7 +457,11 @@ public:
     size_t 			total_layer_count() const { return this->layer_count() + this->support_layer_count(); }
     size_t 			layer_count() const { return m_layers.size(); }
     void 			clear_layers();
+    WallDistanceProgress infill_preparation_progress() const;
+    bool prepare_infill_point_clouds();
     double voronoi_site_spacing(const PrintRegion &region) const;
+    Voronoi::PointCloudSettings voronoi_cloud_settings(const PrintRegion &region) const;
+    std::shared_ptr<const Voronoi::PointCloudProvider> voronoi_point_cloud(const Voronoi::PointCloudSettings &settings) const;
     const Layer* 	get_layer(int idx) const { return m_layers[idx]; }
     Layer* 			get_layer(int idx) 		 { return m_layers[idx]; }
     // Get a layer exactly at print_z.
@@ -575,6 +583,7 @@ public:
     static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index);
 
 private:
+    mutable Voronoi::WallDistanceCloudCache m_voronoi_cloud_cache;
     void make_perimeters();
     void prepare_infill();
     void infill();

@@ -8,6 +8,7 @@
 #include "VoronoiPointCloud.hpp"
 #include <limits>
 #include <memory>
+#include <map>
 #include <utility>
 #include <vector>
 #include <cstddef>
@@ -53,10 +54,9 @@ private:
     std::vector<Voronoi::Band> m_bands;
 };
 
-// Successive fillers in an ascending worker batch reuse the same engine.
-// Clients are sequential; concurrent workers own independent engines.
+// Each worker keeps its own engines while processing ascending layer batches.
 struct VoronoiEngineRegistry {
-    std::shared_ptr<VoronoiInfill> infill;
+    std::map<std::shared_ptr<const Voronoi::PointCloudProvider>, std::shared_ptr<VoronoiInfill>> by_provider;
 };
 
 } // namespace Slic3r
