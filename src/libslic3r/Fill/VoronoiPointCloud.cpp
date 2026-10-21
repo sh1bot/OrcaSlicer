@@ -47,6 +47,22 @@ bool contains(const BoundingBoxf3 &outer, const BoundingBoxf3 &inner)
 }
 } // namespace
 
+PoissonPointCloud::PoissonPointCloud(double angle, const Vec2d &center)
+    : m_cos(std::cos(angle)), m_sin(std::sin(angle)), m_center(center)
+{
+    if (!std::isfinite(angle) || !center.allFinite())
+        throw std::invalid_argument("Invalid Voronoi cloud rotation");
+}
+
+Vec3d PoissonPointCloud::rotate(const Vec3d &point, bool inverse) const
+{
+    if (m_sin == 0. && m_cos == 1.) return point;
+    const Vec2d offset = point.head<2>() - m_center;
+    const double sine = inverse ? -m_sin : m_sin;
+    return Vec3d(m_center.x() + m_cos * offset.x() - sine * offset.y(),
+                 m_center.y() + sine * offset.x() + m_cos * offset.y(), point.z());
+}
+
 double PoissonPointCloud::nominal_spacing(double s, double h, double density)
 {
     // Isotropic Poisson-Voronoi sections have L/A = 2.285851322762418 * lambda^(1/3).
@@ -62,12 +78,28 @@ double PoissonPointCloud::nominal_spacing(double s, double h, double density)
 std::vector<Vec3d> PoissonPointCloud::points_in(const BoundingBoxf3 &box, double spacing) const
 {
     auto sites = candidates_in(box, spacing);
+    for (auto &site : sites) site = rotate(site);
     return sites;
+}
+
+BoundingBoxf3 PoissonPointCloud::generation_bounds(const BoundingBoxf3 &box) const
+{
+    BoundingBoxf3 source = box;
+    if (m_sin != 0. || m_cos != 1.) {
+        source.reset();
+        for (double x : {box.min.x(), box.max.x()})
+            for (double y : {box.min.y(), box.max.y()}) {
+                source.merge(rotate(Vec3d(x, y, box.min.z()), true));
+                source.merge(rotate(Vec3d(x, y, box.max.z()), true));
+            }
+    }
+    return source;
 }
 
 std::vector<Vec3d> PoissonPointCloud::points_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const
 {
     auto sites = candidates_in_cells(first, last, spacing);
+    for (auto &site : sites) site = rotate(site);
     return sites;
 }
 
@@ -78,7 +110,7 @@ std::vector<Vec3d> PoissonPointCloud::candidates_in(const BoundingBoxf3 &box, do
     auto sites = candidates_in_cells((source.min / tile).array().floor().cast<int64_t>(),
         (source.max / tile).array().ceil().cast<int64_t>(), spacing);
     sites.erase(std::remove_if(sites.begin(), sites.end(), [&](const Vec3d &point) {
-        const auto &position = point;
+        const auto position = rotate(point);
         return (position.array() < box.min.array()).any() || (position.array() >= box.max.array()).any();
     }), sites.end());
     return sites;
@@ -109,8 +141,8 @@ std::vector<Vec3d> PoissonPointCloud::candidates_in_cells(const Vec3i64 &first, 
     return sites;
 }
 
-WallDistancePointCloud::WallDistancePointCloud(WallDistanceSamples samples, double maximum_ratio)
-    : m_samples(std::move(samples)), m_maximum_ratio(maximum_ratio)
+WallDistancePointCloud::WallDistancePointCloud(WallDistanceSamples samples, double maximum_ratio, double angle, const Vec2d &center)
+    : PoissonPointCloud(angle, center), m_samples(std::move(samples)), m_maximum_ratio(maximum_ratio)
 {
     if (!m_samples || !std::isfinite(maximum_ratio) || maximum_ratio <= 0.)
         throw std::invalid_argument("Invalid Voronoi material density field");
@@ -130,6 +162,7 @@ std::vector<Vec3d> WallDistancePointCloud::thin(std::vector<Vec3d> candidates) c
 {
     if (candidates.empty()) return {};
     auto sites = candidates;
+    for (auto &site : sites) site = rotate(site);
     const auto samples = m_samples(sites);
     if (samples.size() != sites.size()) throw std::invalid_argument("Invalid Voronoi material density samples");
     std::vector<Vec3d> retained;

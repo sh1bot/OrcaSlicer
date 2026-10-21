@@ -1428,6 +1428,11 @@ Voronoi::PointCloudSettings PrintObject::voronoi_cloud_settings(const PrintRegio
     settings.site_spacing = voronoi_site_spacing(region);
     settings.method = config.voronoi_cloud_method.value;
     settings.relaxation_iterations = config.voronoi_relaxation_iterations.value;
+    settings.angle = Geometry::deg2rad(config.infill_direction.value);
+    if (config.align_infill_direction_to_model) {
+        const auto m = trafo().matrix();
+        settings.angle += atan2((float)m(1, 0), (float)m(0, 0));
+    }
     settings.snap = config.voronoi_snap_to_wall.value;
     settings.region_id = infill_density_region(region.print_object_region_id());
     return settings;

@@ -366,7 +366,7 @@ TEST_CASE("Voronoi extrudes prepared point clouds with native flow and clipping"
     const double spacing = Voronoi::PoissonPointCloud::nominal_spacing(params.flow.spacing() * params.multiline, params.flow.height(), params.density);
     Voronoi::WallDistanceCloudCache cache;
     const double decay = GENERATE(0., 6.);
-    const auto cloud = cache.get([&] { return std::vector<WallSlice>{{0., 20., &outlines}}; }, {{decay != 0. ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, spacing, method, iterations, snap, -1}, {}, {});
+    const auto cloud = cache.get([&] { return std::vector<WallSlice>{{0., 20., &outlines}}; }, {{decay != 0. ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, spacing, method, iterations, 0., snap, -1}, {}, {});
     FillVoronoi filler;
     filler.set_point_cloud(cloud);
     filler.set_bounding_box(region.contour.bounding_box());

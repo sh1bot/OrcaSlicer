@@ -37,10 +37,10 @@ double threshold(int64_t i, int64_t j, int64_t k, VoronoiCloudMethod method)
 }
 } // namespace
 
-LatticePointCloud::LatticePointCloud(VoronoiCloudMethod method, WallDistanceSamples distance, double maximum_ratio)
+LatticePointCloud::LatticePointCloud(VoronoiCloudMethod method, WallDistanceSamples distance, double maximum_ratio, double angle, const Vec2d &center)
     : WallDistancePointCloud(distance ? distance : [](const auto &points) {
           return std::vector<InfillDensitySample>(points.size(), {-2., 1.});
-      }, maximum_ratio), m_method(method), m_variable(bool(distance))
+      }, maximum_ratio, angle, center), m_method(method), m_variable(bool(distance))
 {
     if (method != VoronoiCloudMethod::Fcc && method != VoronoiCloudMethod::Cubic)
         throw std::invalid_argument("Invalid Voronoi lattice method");
@@ -64,7 +64,7 @@ std::vector<Vec3d> LatticePointCloud::points_in(const BoundingBoxf3 &box, double
     for (double x : {box.min.x(), box.max.x()})
         for (double y : {box.min.y(), box.max.y()})
             for (double z : {box.min.z(), box.max.z()})
-                lattice.merge(m_inverse * Vec3d(x, y, z) / edge);
+                lattice.merge(m_inverse * rotate(Vec3d(x, y, z), true) / edge);
     const Vec3i64 first = lattice.min.array().floor().cast<int64_t>().matrix() - Vec3i64::Ones();
     const Vec3i64 last = lattice.max.array().ceil().cast<int64_t>().matrix() + Vec3i64::Ones();
     std::vector<Vec3d> points;
@@ -72,7 +72,7 @@ std::vector<Vec3d> LatticePointCloud::points_in(const BoundingBoxf3 &box, double
     for (int64_t i = first.x(); i <= last.x(); ++i)
         for (int64_t j = first.y(); j <= last.y(); ++j)
             for (int64_t k = first.z(); k <= last.z(); ++k) {
-                const Vec3d p = m_basis * Vec3d(double(i), double(j), double(k)) * edge;
+                const Vec3d p = rotate(m_basis * Vec3d(double(i), double(j), double(k)) * edge);
                 if ((p.array() >= box.min.array()).all() && (p.array() < box.max.array()).all()) {
                     points.push_back(p);
                     if (m_variable) draws.push_back(threshold(i, j, k, m_method));

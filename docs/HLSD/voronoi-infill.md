@@ -9,8 +9,9 @@ material deposited.
 
 `PointCloudProvider` supplies reproducible XYZ points through half-open box
 queries. The random provider uses spatially seeded Poisson sampling, calibrated
-to infill density and bead count. The random cloud is fixed in model coordinates;
-sparse infill direction has no effect on it, as noted in its tooltip.
+to infill density and bead count. Sparse infill direction rotates the cloud
+about Z through the object's bounding-box centre; model alignment adds the
+object's XY rotation. Per-layer rotation templates do not rotate the 3D cloud.
 
 Exterior points participate so that the model boundary does not distort cells.
 Covering bounds determine how far the known cloud must extend. Resulting walls
@@ -75,8 +76,8 @@ The parent retains its point distribution, extrusion and geometry settings.
 
 ## Structured points
 
-FCC and Cubic lattices have their [111] body diagonal vertical.
-Ordered dithering selects sites according to the cube
+FCC and Cubic lattices have their [111] body diagonal vertical and rotate with
+sparse infill direction. Ordered dithering selects sites according to the cube
 of local density. FCC uses tetrahedral parity groups and coarser checkerboards;
 Cubic uses a three-dimensional Bayer order. Density calibration is approximate.
 

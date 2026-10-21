@@ -680,7 +680,8 @@ TEST_CASE("Voronoi keeps supporting walls between horizontal floor faces", "[Fil
 
 TEST_CASE("Voronoi point queries preserve the field when partitioned", "[FillVoronoi]")
 {
-    Voronoi::PoissonPointCloud provider;
+    const double angle = GENERATE(0., 0.37, -1.2);
+    Voronoi::PoissonPointCloud provider(angle, Vec2d(2.5, -1.7));
     const BoundingBoxf3 whole(Vec3d(-13.2, -8.1, -9.4), Vec3d(14.7, 12.6, 11.3));
     auto keys = [](const std::vector<Vec3d> &points) {
         std::set<std::array<double, 3>> result;
@@ -697,6 +698,76 @@ TEST_CASE("Voronoi point queries preserve the field when partitioned", "[FillVor
     auto rest = provider.points_in(second, 3.);
     points.insert(points.end(), rest.begin(), rest.end());
     REQUIRE(keys(points) == expected);
+}
+
+TEST_CASE("Random cloud rotation preserves points and thinning in a spherical field", "[FillVoronoi][Rotation]")
+{
+    const double angle = GENERATE(0.37, -1.2);
+    const Vec2d center(4., -3.);
+    const BoundingBoxf3 box(Vec3d(-16., -23., -20.), Vec3d(24., 17., 20.));
+    auto distance = [center](const std::vector<Vec3d> &points) {
+        std::vector<InfillDensitySample> samples;
+        for (const auto &p : points) {
+            const double d = (p - Vec3d(center.x(), center.y(), 0.)).norm() - 10.;
+            samples.push_back({d, InfillDensityField::density_ratio(d, d, 32.)});
+        }
+        return samples;
+    };
+    const bool thinned = GENERATE(false, true);
+    std::shared_ptr<const Voronoi::PointCloudProvider> original, rotated;
+    if (thinned) {
+        original = std::make_shared<Voronoi::WallDistancePointCloud>(distance, InfillDensityField::density_ratio(0., 2., 32.));
+        rotated = std::make_shared<Voronoi::WallDistancePointCloud>(distance, InfillDensityField::density_ratio(0., 2., 32.), angle, center);
+    } else {
+        original = std::make_shared<Voronoi::PoissonPointCloud>();
+        rotated = std::make_shared<Voronoi::PoissonPointCloud>(angle, center);
+    }
+    auto interior = [center](std::vector<Vec3d> sites) {
+        sites.erase(std::remove_if(sites.begin(), sites.end(), [center](const auto &p) {
+            return (p - Vec3d(center.x(), center.y(), 0.)).norm() >= 10.;
+        }), sites.end());
+        return sites;
+    };
+    const auto source = interior(original->points_in(box, 3.));
+    const auto result = interior(rotated->points_in(box, 3.));
+    REQUIRE_FALSE(source.empty());
+    REQUIRE(result.size() == source.size());
+    for (const auto &p : source) {
+        const Vec2d offset = p.head<2>() - center;
+        const Vec3d expected(center.x() + std::cos(angle) * offset.x() - std::sin(angle) * offset.y(),
+                             center.y() + std::sin(angle) * offset.x() + std::cos(angle) * offset.y(), p.z());
+        const auto nearest = std::min_element(result.begin(), result.end(), [&](const auto &a, const auto &b) {
+            return (a - expected).squaredNorm() < (b - expected).squaredNorm();
+        });
+        REQUIRE_THAT((*nearest - expected).norm(), Catch::Matchers::WithinAbs(0., 1e-12));
+    }
+}
+
+TEST_CASE("Wall-distance thinning samples rotated candidates in model coordinates", "[FillVoronoi][Rotation]")
+{
+    const BoundingBoxf3 box(Vec3d(-12., -10., -5.), Vec3d(12., 10., 5.));
+    std::vector<Vec3d> sampled;
+    Voronoi::WallDistancePointCloud rotated([&](const auto &points) {
+        sampled = points;
+        return std::vector<InfillDensitySample>(points.size(), {-1., 1.});
+    }, InfillDensityField::density_ratio(0., 2., 32.), 0.37, Vec2d(2., -3.));
+    const auto retained = rotated.points_in(box, 3.);
+    const auto candidates = Voronoi::PoissonPointCloud(0.37, Vec2d(2., -3.)).points_in(
+        box, 3. / InfillDensityField::density_ratio(0., 2., 32.));
+    REQUIRE(sampled == candidates);
+    REQUIRE_FALSE(retained.empty());
+    const BoundingBoxf3 first(box.min, Vec3d(0., box.max.y(), box.max.z()));
+    const BoundingBoxf3 second(Vec3d(0., box.min.y(), box.min.z()), box.max);
+    auto parts = rotated.points_in(first, 3.);
+    const auto rest = rotated.points_in(second, 3.);
+    parts.insert(parts.end(), rest.begin(), rest.end());
+    auto keys = [](const auto &points) {
+        std::set<std::array<double, 3>> result;
+        for (const auto &p : points) result.insert({p.x(), p.y(), p.z()});
+        return result;
+    };
+    REQUIRE(keys(parts) == keys(retained));
+    REQUIRE_THROWS_AS(Voronoi::PoissonPointCloud(std::numeric_limits<double>::quiet_NaN()), std::invalid_argument);
 }
 
 TEST_CASE("Voronoi coverage includes boundary corners without internal nodes", "[FillVoronoi]")
@@ -1018,14 +1089,14 @@ TEST_CASE("Uniform Voronoi density retains corner boosts", "[FillVoronoi]")
     Voronoi::WallDistanceCloudCache cache;
     size_t loads = 0;
     const auto slices = [&] { ++loads; return std::vector<WallSlice>{{0., 20., &outlines}}; };
-    const auto plain = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, false, -1}, {}, {});
+    const auto plain = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {});
     const BoundingBoxf3 box(Vec3d(-5., -5., 0.), Vec3d(5., 5., 10.));
     REQUIRE(plain->points_in(box, 2.) == Voronoi::PoissonPointCloud().points_in(box, 2.));
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, false, -1}, {}, {}) == plain);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {}) == plain);
     REQUIRE(loads == 0);
-    const auto graded = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, false, -1}, {}, {});
+    const auto graded = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {});
     REQUIRE(graded != plain);
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, false, -1}, {}, {}) == graded);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {}) == graded);
     REQUIRE(loads == 1);
     REQUIRE_THROWS_AS(Cloud({}, -1.), std::invalid_argument);
 }
@@ -1059,16 +1130,43 @@ TEST_CASE("Canceled Voronoi smoothing leaves the cache usable", "[FillVoronoi]")
     const ExPolygons outlines{rectangle(0., 0., 20., 20.)};
     Voronoi::WallDistanceCloudCache cache;
     const auto slices = [&] { return std::vector<WallSlice>{{0., 20., &outlines}}; };
-    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, false, -1}, [](WallDistanceStage stage, double) {
+    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, [](WallDistanceStage stage, double) {
             if (stage == WallDistanceStage::SmoothXY) throw std::runtime_error("cancel");
         }, {}), std::runtime_error);
     bool completed = false;
-    const auto provider = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, false, -1}, [&](WallDistanceStage stage, double fraction) {
+    const auto provider = cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, [&](WallDistanceStage stage, double fraction) {
             if (stage == WallDistanceStage::Complete && fraction == 1.) completed = true;
         }, {});
     REQUIRE(completed);
     REQUIRE(provider != nullptr);
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, false, -1}, [](auto, double) { throw std::runtime_error("cached fields must not rebuild"); }, {}) == provider);
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::SmoothBlend, 2., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, [](auto, double) { throw std::runtime_error("cached fields must not rebuild"); }, {}) == provider);
+}
+
+TEST_CASE("Point-cloud orientation uses the object centre and shares wall-distance tables", "[FillVoronoi][Rotation]")
+{
+    const auto method = GENERATE(VoronoiCloudMethod::Random, VoronoiCloudMethod::Fcc, VoronoiCloudMethod::Cubic);
+    Voronoi::WallDistanceCloudCache cache;
+    const ExPolygons outlines {rectangle(-2., -9., 10., 3.)};
+    const auto slices = [&] { return std::vector<WallSlice>{{-6., 6., &outlines}}; };
+    const bool adaptive = GENERATE(false, true);
+    const double angle = 0.37;
+    const auto original = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, -1}, {}, {});
+    const auto rotated = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, angle, false, -1}, [](auto stage, double) {
+        if (stage == WallDistanceStage::Distance) throw std::runtime_error("Distances already cached");
+    }, {});
+    REQUIRE(rotated != original);
+    REQUIRE(rotated == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, angle, false, -1}, {}, {}));
+    REQUIRE(original == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 2. * std::acos(-1.), false, -1}, {}, {}));
+    const BoundingBoxf3 box(Vec3d(-20., -20., -10.), Vec3d(20., 20., 10.));
+    if (!adaptive) {
+        if (method == VoronoiCloudMethod::Random)
+            REQUIRE(rotated->points_in(box, 3.) == Voronoi::PoissonPointCloud(angle, Vec2d(4., -3.)).points_in(box, 3.));
+        else
+            REQUIRE(rotated->points_in(box, 3.) == Voronoi::LatticePointCloud(method, {}, 1., angle, Vec2d(4., -3.)).points_in(box, 3.));
+    }
+    const auto relaxed = cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, angle, false, -1}, {}, {});
+    REQUIRE(relaxed == cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, angle, false, -1}, {}, {}));
+    REQUIRE(relaxed != cache.get(slices, {{adaptive ? AdaptiveInfillMode::SmoothBlend : AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 1, 0., false, -1}, {}, {}));
 }
 
 TEST_CASE("Spring relaxation balances interior edges while holding the cloud boundary", "[FillVoronoi][Relaxation]")
@@ -1143,8 +1241,8 @@ TEST_CASE("Zero relaxation retains the original provider without preparing an ob
     Voronoi::WallDistanceCloudCache cache;
     int loads = 0;
     const auto slices = [&] { ++loads; return std::vector<WallSlice>{}; };
-    const auto original = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, false, -1}, {}, {});
-    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 4., VoronoiCloudMethod::Random, 0, false, -1}, {}, {}) == original);
+    const auto original = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {});
+    REQUIRE(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 4., VoronoiCloudMethod::Random, 0, 0., false, -1}, {}, {}) == original);
     REQUIRE_FALSE(original->extent().has_value());
     REQUIRE(loads == 0);
 }
@@ -1155,20 +1253,21 @@ TEST_CASE("Canceled point relaxation leaves the generated provider reusable", "[
     const ExPolygons outlines {rectangle(0., 0., 12., 12.)};
     Voronoi::WallDistanceCloudCache cache;
     const auto slices = [&] { return std::vector<WallSlice>{{0., 12., &outlines}}; };
-    const auto original = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 0, false, -1}, {}, {});
-    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, false, -1}, [](WallDistanceStage stage, double fraction) {
+    const auto original = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 0, 0., false, -1}, {}, {});
+    REQUIRE_THROWS_AS(cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1}, [](WallDistanceStage stage, double fraction) {
         if (stage == WallDistanceStage::Relaxation && fraction > 0.1) throw std::runtime_error("Canceled");
     }, {}), std::runtime_error);
-    REQUIRE(original == cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 0, false, -1}, {}, {}));
-    const auto relaxed = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, false, -1}, {}, {});
-    REQUIRE(relaxed == cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, false, -1}, {}, {}));
+    REQUIRE(original == cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 0, 0., false, -1}, {}, {}));
+    const auto relaxed = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1}, {}, {});
+    REQUIRE(relaxed == cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 3., method, 3, 0., false, -1}, {}, {}));
     REQUIRE(relaxed != original);
     REQUIRE(relaxed->extent()->defined);
 }
 
 TEST_CASE("FCC has twelve nearest neighbours and a vertical body diagonal", "[FillVoronoi][Fcc]")
 {
-    const Voronoi::LatticePointCloud cloud(VoronoiCloudMethod::Fcc, {}, 1.);
+    const double angle = GENERATE(0., 0.37);
+    const Voronoi::LatticePointCloud cloud(VoronoiCloudMethod::Fcc, {}, 1., angle);
     const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-8.), Vec3d::Constant(8.)), 3.);
     std::vector<Vec3d> neighbours;
     for (const auto &p : sites)
@@ -1189,7 +1288,8 @@ TEST_CASE("FCC has twelve nearest neighbours and a vertical body diagonal", "[Fi
 
 TEST_CASE("Cubic sites have six orthogonal neighbours and a vertical body diagonal", "[FillVoronoi][Lattice]")
 {
-    const Voronoi::LatticePointCloud cloud(VoronoiCloudMethod::Cubic, {}, 1.);
+    const double angle = GENERATE(0., 0.37);
+    const Voronoi::LatticePointCloud cloud(VoronoiCloudMethod::Cubic, {}, 1., angle);
     const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-8.), Vec3d::Constant(8.)), 3.);
     std::vector<Vec3d> neighbours;
     for (const auto &p : sites)
@@ -1210,6 +1310,7 @@ TEST_CASE("Cubic sites have six orthogonal neighbours and a vertical body diagon
 TEST_CASE("FCC thinning follows cubic tetrahedra and coarser checkerboards", "[FillVoronoi][Fcc]")
 {
     const double retention = GENERATE(0.75, 0.5, 0.25, 0.125, 0.015625);
+    const double angle = GENERATE(0., 0.37);
     const double maximum_depth = 6., spacing = 3.;
     const double near = InfillDensityField::near_wall_distance;
     const double maximum = InfillDensityField::density_ratio(0., near, 0.);
@@ -1231,15 +1332,16 @@ TEST_CASE("FCC thinning follows cubic tetrahedra and coarser checkerboards", "[F
         return std::vector<InfillDensitySample>(points.size(), {0., InfillDensityField::density_ratio(0., near, maximum_depth)});
     };
     const BoundingBoxf3 box(Vec3d::Constant(-12.), Vec3d::Constant(12.));
-    const auto selected = Voronoi::LatticePointCloud(VoronoiCloudMethod::Fcc, samples, maximum).points_in(box, spacing);
-    const auto candidates = Voronoi::LatticePointCloud(VoronoiCloudMethod::Fcc, saturated, maximum).points_in(box, spacing);
+    const auto selected = Voronoi::LatticePointCloud(VoronoiCloudMethod::Fcc, samples, maximum, angle).points_in(box, spacing);
+    const auto candidates = Voronoi::LatticePointCloud(VoronoiCloudMethod::Fcc, saturated, maximum, angle).points_in(box, spacing);
     Eigen::Matrix3d orientation;
     orientation.row(0) = Vec3d(1., -1., 0.).normalized();
     orientation.row(1) = Vec3d(1., 1., -2.).normalized();
     orientation.row(2) = Vec3d(1., 1., 1.).normalized();
     const double half_cube = std::pow(2., 1. / 6.) * spacing / maximum / std::sqrt(2.);
     const auto coordinates = [&](const Vec3d &p) {
-        const Vec3d untilted = orientation.transpose() * p;
+        const Vec3d untilted = orientation.transpose() * Vec3d(std::cos(angle) * p.x() + std::sin(angle) * p.y(),
+                                                             -std::sin(angle) * p.x() + std::cos(angle) * p.y(), p.z());
         return std::array<int64_t, 3>{std::llround(untilted.x() / half_cube), std::llround(untilted.y() / half_cube),
                                       std::llround(untilted.z() / half_cube)};
     };
@@ -1263,11 +1365,12 @@ TEST_CASE("Lattice thinning follows density and preserves partitioned queries", 
 {
     const auto method = GENERATE(VoronoiCloudMethod::Fcc, VoronoiCloudMethod::Cubic);
     const bool adaptive = GENERATE(false, true);
+    const double angle = GENERATE(0., 0.37);
     const double maximum = InfillDensityField::density_ratio(0., 2., 0.);
     const auto sample = [adaptive](const std::vector<Vec3d> &points) {
         return std::vector<InfillDensitySample>(points.size(), {-6., InfillDensityField::density_ratio(-6., -6., adaptive ? 32. : 0.)});
     };
-    const Voronoi::LatticePointCloud cloud(method, sample, maximum);
+    const Voronoi::LatticePointCloud cloud(method, sample, maximum, angle);
     const BoundingBoxf3 box(Vec3d(-50.3, -49.7, -48.8), Vec3d(51.2, 50.4, 49.9));
     const auto whole = cloud.points_in(box, 3.);
     REQUIRE_FALSE(whole.empty());
@@ -1282,7 +1385,7 @@ TEST_CASE("Lattice thinning follows density and preserves partitioned queries", 
     auto parts = cloud.points_in(first, 3.);
     append(parts, cloud.points_in(second, 3.));
     REQUIRE(keys(parts) == keys(whole));
-    const auto candidates = Voronoi::LatticePointCloud(method, {}, 1.).points_in(box, 3. / maximum);
+    const auto candidates = Voronoi::LatticePointCloud(method, {}, 1., angle).points_in(box, 3. / maximum);
     const double probability = std::pow(InfillDensityField::density_ratio(-6., -6., adaptive ? 32. : 0.) / maximum, 3.);
     REQUIRE_THAT(double(whole.size()) / candidates.size(), Catch::Matchers::WithinRel(probability, 0.08));
     REQUIRE(cloud.points_in(box, 3.) == whole);
@@ -1435,12 +1538,12 @@ TEST_CASE("Fused point clouds accommodate higher modifier density and empty inte
     if (target > 0.) modifier.interior_density = target;
     Voronoi::WallDistanceCloudCache cache;
     const auto slices = [&] { return std::vector<WallSlice>{{0., 40., &model}}; };
-    const auto field = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.1, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, false, 3}, {}, {modifier});
+    const auto field = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.1, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, 3}, {}, {modifier});
     const BoundingBoxf3 box(Vec3d(4., -5., 15.), Vec3d(14., 5., 25.));
     const auto points = field->points_in(box, 3.);
     if (target == 0.) REQUIRE(points.empty());
     else {
-        const auto uniform = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, false, -1}, {}, {})->points_in(box, 3.);
+        const auto uniform = cache.get(slices, {{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method, 0, 0., false, -1}, {}, {})->points_in(box, 3.);
         REQUIRE(points.size() > 50 * uniform.size());
     }
     const auto spacing = field->local_spacing({Vec3d(10., 0., 20.)}, 3.).front();
@@ -1875,7 +1978,7 @@ TEST_CASE("A wider slice slab does not reopen safely retired generation cells", 
     REQUIRE(cloud.retired_below() >= cutoff);
 }
 
-TEST_CASE("Adaptive streaming never resamples rejected candidates", "[FillVoronoi][Incremental]")
+TEST_CASE("Rotated adaptive streaming never resamples rejected candidates", "[FillVoronoi][Incremental]")
 {
     std::set<std::array<double, 3>> visited;
     auto provider = std::make_shared<Voronoi::WallDistancePointCloud>([&](const auto &points) {
@@ -1885,7 +1988,7 @@ TEST_CASE("Adaptive streaming never resamples rejected candidates", "[FillVorono
             samples.push_back({-1., 0.5});
         }
         return samples;
-    }, 1.);
+    }, 1., 0.37, Vec2d(1., 2.));
     Voronoi::ActivePointCloud cloud(provider);
     const auto bounds = rectangle(-2., -2., 2., 2.).contour.bounding_box();
     for (double z = 0.; z < 20.; z += 0.2)

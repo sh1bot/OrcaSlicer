@@ -3605,7 +3605,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("infill_direction", coFloat);
     def->label = L("Sparse infill direction");
     def->category = L("Strength");
-    def->tooltip = L("This is the angle for sparse infill pattern, which controls the start or main direction of lines. Random Voronoi uses a point cloud fixed in model coordinates and ignores this setting; FCC and Cubic rotate around Z.");
+    def->tooltip = L("This is the angle for sparse infill pattern, which controls the start or main direction of lines. Voronoi rotates a fixed 3D point cloud around Z; per-layer rotation templates do not apply.");
     def->sidetext = u8"°";	// degrees, don't need translation
     def->min = 0;
     def->max = 360;
@@ -3763,7 +3763,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("voronoi_cloud_method", coEnum);
     def->label = L("Voronoi point cloud");
     def->category = L("Strength");
-    def->tooltip = L("Random places independent points according to local density. FCC and Cubic use lattices with a vertical body diagonal, thinning points with a three-dimensional ordered dither to follow local density. Cubic is preferable for steeper walls: its complete lattice gives faces about 55 degrees above horizontal, versus about 35 degrees for FCC, below the usual 45-degree guideline. Thinning can produce shallower faces; no method guarantees self-supporting infill. High Voronoi material density can require substantial memory; consider Fill Multiline for thicker walls with fewer cells.");
+    def->tooltip = L("Random places independent points according to local density. FCC and Cubic use lattices with a vertical body diagonal, thinning points with a three-dimensional ordered dither to follow local density. Sparse infill direction rotates the cloud around Z. Cubic is preferable for steeper walls: its complete lattice gives faces about 55 degrees above horizontal, versus about 35 degrees for FCC, below the usual 45-degree guideline. Thinning can produce shallower faces; no method guarantees self-supporting infill. High Voronoi material density can require substantial memory; consider Fill Multiline for thicker walls with fewer cells.");
     def->enum_keys_map = &ConfigOptionEnum<VoronoiCloudMethod>::get_enum_values();
     def->enum_values = {"random", "fcc", "cubic"};
     def->enum_labels = {L("Random"), L("FCC"), L("Cubic")};
