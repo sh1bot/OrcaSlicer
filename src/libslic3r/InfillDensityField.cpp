@@ -2,6 +2,7 @@
 #include "ExPolygon.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
 #include <optional>
+#include "InfillMaterialDensity.hpp"
 #include "opencv2/core/mat.hpp"
 #include "opencv2/core/base.hpp"
 #include "PrintConfig.hpp"
@@ -114,6 +115,7 @@ std::vector<float> smoothed_distances(const AdaptiveInfillDistanceField &origina
 
 AdaptiveInfillFields density_geometry(InfillDensityCache &cache,
     const std::function<std::vector<WallSlice>()> &load_slices, AdaptiveInfillMode mode,
+    const std::vector<DensityModifier> &modifiers, int region_id,
     const WallDistanceProgress &progress)
 {
     AdaptiveInfillFields shapes;
@@ -126,6 +128,8 @@ AdaptiveInfillFields density_geometry(InfillDensityCache &cache,
         shapes[size_t(mode)] = distance ? shapes[size_t(AdaptiveInfillMode::SmoothBlend)] : cache.geometry(load_slices, mode, true, progress);
     };
     prepare(mode);
+    for (const auto &modifier : modifiers)
+        if (modifier.region_id == region_id) prepare(modifier.mode.value_or(mode));
     return shapes;
 }
 
@@ -140,8 +144,9 @@ struct InfillDensityField::Data {
     double interior_density;
     AdaptiveInfillGradient gradient;
     std::vector<float> smoothed;
+    std::vector<float> material;
     explicit Data(std::vector<WallSlice> slices, double smoothing_sigma, const WallDistanceProgress &progress,
-                   AdaptiveInfillMode mode, double material_density, double interior_density, AdaptiveInfillGradient gradient, AdaptiveInfillFields geometry)
+                   AdaptiveInfillMode mode, double material_density, const std::vector<DensityModifier> &modifiers, int region_id, double interior_density, AdaptiveInfillGradient gradient, AdaptiveInfillFields geometry)
         : geometry(std::move(geometry)), reference_density(material_density), mode(mode),
           interior_density(interior_density), gradient(gradient)
     {
@@ -149,19 +154,86 @@ struct InfillDensityField::Data {
             !std::isfinite(interior_density) || interior_density <= 0. || interior_density > 1.) throw std::invalid_argument("Invalid material density settings");
         if (!std::isfinite(smoothing_sigma) || smoothing_sigma < 0. || smoothing_sigma > maximum_smoothing_sigma)
             throw std::invalid_argument("Invalid infill smoothing sigma");
+        const bool composited = std::any_of(modifiers.begin(), modifiers.end(), [region_id](const auto &m) { return m.region_id == region_id; });
         const auto density_bound = [&](double density, double sigma, bool graded, double interior) {
             const double boost = InfillDensityField::density_ratio(0., sigma == 0. ? 0. : 2.);
             const double bound = std::min(1., std::max(density, graded ? interior : 0.) + density * (boost - 1.));
-            return bound / reference_density;
+            return (composited ? std::max(bound, double(float(bound))) : bound) / reference_density;
         };
         maximum_ratio = std::max(0.01, density_bound(material_density, smoothing_sigma, mode != AdaptiveInfillMode::Disabled, interior_density));
         const auto selected = AdaptiveInfillMode::SmoothBlend;
         if (!this->geometry[size_t(selected)]) {
             InfillDensityCache cache;
-            this->geometry = density_geometry(cache, [&] { return slices; }, mode, progress);
+            this->geometry = density_geometry(cache, [&] { return slices; }, mode, modifiers, region_id, progress);
         }
         original = this->geometry[size_t(selected)]->distances();
         smoothed = smoothed_distances(original, smoothing_sigma, progress);
+        const auto &size = original.grid_size();
+        const auto &origin = original.grid_origin();
+        const double spacing = original.grid_spacing();
+        const size_t count = original.node_count();
+        if (count && composited) {
+            material.resize(count);
+            for (size_t i = 0; i < count; ++i) {
+                if (i % 65536 == 0) report(progress, WallDistanceStage::MaterialDensity, double(i) / count);
+                const Vec3d point = origin + spacing * Vec3d(double(i % size[0]),
+                    double((i / size[0]) % size[1]), double(i / (size[0] * size[1])));
+                const double raw = original.node_value(i);
+                const double mean = smoothed.empty() ? raw : double(smoothed[i]);
+                material[i] = float(std::min(1., material_density * local_ratio(point, raw, mean, mode,
+                    mode != AdaptiveInfillMode::Disabled && interior_density != material_density, interior_density / material_density, gradient)));
+            }
+        }
+        size_t modifier_index = 0;
+        for (const DensityModifier &modifier : modifiers) {
+            if (modifier.region_id != region_id) continue;
+            if (!std::isfinite(modifier.material_density) || modifier.material_density < 0. || modifier.material_density > 1. ||
+                !std::isfinite(modifier.blend_width) || modifier.blend_width < 0.)
+                throw std::invalid_argument("Invalid infill density modifier");
+            const double target_sigma = modifier.smoothing_sigma.value_or(smoothing_sigma);
+            const double target_interior = modifier.interior_density.value_or(interior_density);
+            const auto target_mode = modifier.mode.value_or(mode);
+            const bool target_adaptive = target_mode != AdaptiveInfillMode::Disabled && target_interior != modifier.material_density;
+            const auto target_gradient = modifier.gradient.value_or(gradient);
+            if (!std::isfinite(target_interior) || target_interior <= 0. || target_interior > 1. || !std::isfinite(target_sigma) || target_sigma < 0. || target_sigma > maximum_smoothing_sigma)
+                throw std::invalid_argument("Invalid infill modifier density settings");
+            maximum_ratio = std::max(maximum_ratio, density_bound(modifier.material_density, target_sigma, target_adaptive, target_interior));
+            std::vector<WallSlice> mask_slices;
+            for (const auto &slice : modifier.slices)
+                mask_slices.push_back({slice.bottom_z, slice.top_z, &slice.contours});
+            // Use Orca's sliced modifier outline, including its top and bottom.
+            std::mutex mask_progress_mutex;
+            AdaptiveInfillDistanceField mask(mask_slices, {}, [&] {
+                // Voxel cancellation probes may run concurrently on TBB workers.
+                std::lock_guard<std::mutex> lock(mask_progress_mutex);
+                report(progress, WallDistanceStage::Modifiers, double(modifier_index) / modifiers.size());
+            }, {}, true);
+            const bool own_smoothing = target_sigma != smoothing_sigma;
+            const auto modifier_values = own_smoothing ? smoothed_distances(original, target_sigma, [&](auto, double) {
+                report(progress, WallDistanceStage::Modifiers, double(modifier_index) / modifiers.size());
+            }) : std::vector<float>{};
+            const auto &target_values = own_smoothing ? modifier_values : smoothed;
+            for (size_t first = 0; first < count; first += 4096) {
+                report(progress, WallDistanceStage::Modifiers, (modifier_index + double(first) / count) / modifiers.size());
+                std::vector<Vec3d> points;
+                const size_t last = std::min(count, first + 4096);
+                points.reserve(last - first);
+                for (size_t i = first; i < last; ++i)
+                    points.push_back(origin + spacing * Vec3d(double(i % size[0]), double((i / size[0]) % size[1]), double(i / (size[0] * size[1]))));
+                const auto depths = mask.sample(points);
+                for (size_t j = 0; j < points.size(); ++j) {
+                    const double blend = modifier_blend(-depths[j], modifier.blend_width);
+                    if (blend == 0.) continue;
+                    const size_t i = first + j;
+                    const double raw = original.node_value(i);
+                    const double mean = target_values.empty() ? raw : double(target_values[i]);
+                    const double density = std::min(1., modifier.material_density == 0. ? 0. : modifier.material_density * local_ratio(points[j], raw, mean, target_mode, target_adaptive, target_interior / modifier.material_density, target_gradient));
+                    material[i] = float((1. - blend) * material[i] + blend * density);
+                }
+            }
+            ++modifier_index;
+        }
+        if (!material.empty()) std::vector<float>().swap(smoothed);
         report(progress, WallDistanceStage::Complete, 1.);
     }
 
@@ -192,6 +264,11 @@ struct InfillDensityField::Data {
     {
         if (original.empty()) return reference_density;
         const auto where = original.interpolation(point);
+        if (!material.empty()) {
+            double value = 0.;
+            for (size_t j = 0; j < 8; ++j) value += material[where.indices[j]] * where.weights[j];
+            return value;
+        }
         const double raw = original.sample(where);
         double mean = raw;
         if (!smoothed.empty()) {
@@ -206,8 +283,8 @@ struct InfillDensityField::Data {
 };
 
 InfillDensityField::InfillDensityField(std::vector<WallSlice> slices, double smoothing_sigma, const WallDistanceProgress &progress, AdaptiveInfillMode mode, double material_density,
-                                     double interior_density, AdaptiveInfillGradient gradient, AdaptiveInfillFields geometry)
-    : m_data(std::make_shared<Data>(std::move(slices), smoothing_sigma, progress, mode, material_density, interior_density, gradient, std::move(geometry))) {}
+                                     const std::vector<DensityModifier> &modifiers, int region_id, double interior_density, AdaptiveInfillGradient gradient, AdaptiveInfillFields geometry)
+    : m_data(std::make_shared<Data>(std::move(slices), smoothing_sigma, progress, mode, material_density, modifiers, region_id, interior_density, gradient, std::move(geometry))) {}
 
 double InfillDensityField::grid_spacing() const { return m_data->original.grid_spacing(); }
 double InfillDensityField::maximum_density_ratio() const { return m_data->maximum_ratio; }
@@ -284,18 +361,19 @@ std::shared_ptr<const AdaptiveInfillField> InfillDensityCache::geometry(
 
 std::shared_ptr<const InfillDensityField> InfillDensityCache::get(
     const std::function<std::vector<WallSlice>()> &load_slices, const InfillDensitySettings &s,
-    const WallDistanceProgress &progress)
+    const WallDistanceProgress &progress, const std::vector<DensityModifier> &modifiers, int region_id)
 {
-    auto shapes = density_geometry(*this, load_slices, s.mode, progress);
-    const bool composited = false;
+    auto shapes = density_geometry(*this, load_slices, s.mode, modifiers, region_id, progress);
+    const bool composited = std::any_of(modifiers.begin(), modifiers.end(),
+        [region_id](const auto &modifier) { return modifier.region_id == region_id; });
     if (s.sigma == 0. && !composited)
         return std::make_shared<InfillDensityField>(std::vector<WallSlice>{}, 0., progress,
-            s.mode, s.material_density, s.interior_density, s.gradient, std::move(shapes));
+            s.mode, s.material_density, modifiers, region_id, s.interior_density, s.gradient, std::move(shapes));
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto &field = m_fields[{s.mode, s.sigma, s.material_density, s.interior_density, s.gradient}];
+    auto &field = m_fields[{s.mode, s.sigma, s.material_density, region_id, s.interior_density, s.gradient}];
     if (!field)
         field = std::make_shared<InfillDensityField>(std::vector<WallSlice>{}, s.sigma, progress,
-            s.mode, s.material_density, s.interior_density, s.gradient, std::move(shapes));
+            s.mode, s.material_density, modifiers, region_id, s.interior_density, s.gradient, std::move(shapes));
     return field;
 }
 

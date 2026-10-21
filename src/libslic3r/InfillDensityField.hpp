@@ -28,7 +28,23 @@ struct InfillDensitySample {
 
 using WallSlice = AdaptiveInfillDistanceField::Slice;
 
-enum class WallDistanceStage { Distance, Encoding, SmoothXY, SmoothZ, Complete };
+struct DensityModifierSlice {
+    double bottom_z, top_z;
+    ExPolygons contours;
+};
+
+// Stored in Orca's modifier order, scoped to the unsplit parent print region.
+struct DensityModifier {
+    int region_id;
+    double material_density;
+    double blend_width;
+    std::vector<DensityModifierSlice> slices;
+    std::optional<double> smoothing_sigma, interior_density;
+    std::optional<AdaptiveInfillGradient> gradient;
+    std::optional<AdaptiveInfillMode> mode;
+};
+
+enum class WallDistanceStage { Distance, Encoding, SmoothXY, SmoothZ, MaterialDensity, Modifiers, Complete };
 // Called synchronously during construction, including within long phases.
 // The callback may throw to cancel construction; no partial table is cached.
 using WallDistanceProgress = std::function<void(WallDistanceStage, double)>;
@@ -39,7 +55,7 @@ public:
     static constexpr double maximum_smoothing_sigma = 64.;
     explicit InfillDensityField(std::vector<WallSlice> slices, double smoothing_sigma = 0.,
                                const WallDistanceProgress &progress = {}, AdaptiveInfillMode mode = AdaptiveInfillMode::SmoothBlend, double material_density = 0.25,
-                               double interior_density = 0.05, AdaptiveInfillGradient gradient = AdaptiveInfillGradient::Linear, AdaptiveInfillFields geometry = {});
+                               const std::vector<DensityModifier> &modifiers = {}, int region_id = -1, double interior_density = 0.05, AdaptiveInfillGradient gradient = AdaptiveInfillGradient::Linear, AdaptiveInfillFields geometry = {});
     // Absolute material fraction, from zero to one.
     double density(const Vec3d &point) const;
     double maximum_density() const;
@@ -76,7 +92,8 @@ struct InfillDensitySettings {
 class InfillDensityCache {
 public:
     std::shared_ptr<const InfillDensityField> get(const std::function<std::vector<WallSlice>()> &load_slices,
-        const InfillDensitySettings &settings, const WallDistanceProgress &progress = {});
+        const InfillDensitySettings &settings, const WallDistanceProgress &progress = {},
+        const std::vector<DensityModifier> &modifiers = {}, int region_id = -1);
     std::shared_ptr<const AdaptiveInfillField> geometry(const std::function<std::vector<WallSlice>()> &load_slices,
         AdaptiveInfillMode mode, bool signed_distances = true,
         const WallDistanceProgress &progress = {});
@@ -87,7 +104,7 @@ private:
     // The object and density evaluators use these same prepared profile arrays.
     std::array<AdaptiveInfillFields, 2> m_geometry;
     std::map<std::pair<int, bool>, std::shared_ptr<const AdaptiveInfillDistanceField>> m_distances;
-    std::map<std::tuple<AdaptiveInfillMode, double, double, double, AdaptiveInfillGradient>, std::shared_ptr<const InfillDensityField>> m_fields;
+    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, AdaptiveInfillGradient>, std::shared_ptr<const InfillDensityField>> m_fields;
 };
 
 } // namespace Slic3r

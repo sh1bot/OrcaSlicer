@@ -69,6 +69,10 @@ depth or lobe/section profiles when Adaptive density is enabled, and independent
 corners when smoothing is enabled. The defaults (Disabled and zero smoothing)
 give a uniform cloud without preparing a distance field.
 
+Fused modifiers change this field without splitting the point cloud. Candidate
+bounds include every participating density, interior target and corner boost.
+The parent retains its point distribution, extrusion and geometry settings.
+
 Point ingestion advances in complete generation cubes. Sites remain unchanged between batches; obsolete lower cube rows are retired immediately before the next batch is generated. The persistent Delaunay network removes those vertices before inserting new ones.
 
 Adaptive point selection reuses the object’s prepared spatial profile. A provider owns its density evaluator; direct profile evaluation has no separate result cache. Gaussian smoothing and modifier compositing cache their prepared buffers.

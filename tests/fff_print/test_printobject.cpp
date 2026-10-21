@@ -9,6 +9,7 @@
 #include <catch2/catch_message.hpp>
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/Exception.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/ClipperUtils.hpp"
@@ -720,6 +721,34 @@ TEST_CASE("Z contouring follows the surface of each instance as it is turned", "
         // Enough points in common to mean something, and contouring did move some of them.
         CHECK(matched > 100);
         CHECK(lifted > 0);
+    }
+}
+
+TEST_CASE("Fused density modifiers validate parent eligibility before slicing", "[PrintObject][Voronoi][Regression]")
+{
+    const std::string pattern = GENERATE("voronoi", "grid");
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", pattern}, {"sparse_infill_density", "15%"}});
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({make_cube(20., 20., 4.)}, print, model, config);
+    auto *modifier = model.objects.front()->add_volume(make_cube(10., 10., 4.), ModelVolumeType::PARAMETER_MODIFIER, false);
+    modifier->config.set_key_value("infill_modifier_blend", new ConfigOptionFloat(2.));
+    modifier->config.set_key_value("sparse_infill_density", new ConfigOptionPercent(30.));
+    print.apply(model, config);
+    const auto result = print.validate();
+    if (pattern == "grid") {
+        REQUIRE_FALSE(result.string.empty());
+        REQUIRE(result.object != nullptr);
+        REQUIRE(result.object->id() == modifier->id());
+        REQUIRE(result.opt_key == "infill_modifier_blend");
+    } else {
+        REQUIRE(result.string.empty());
+        REQUIRE_NOTHROW(print.process());
+        const PrintObject &object = *print.objects().front();
+        const auto settings = object.voronoi_cloud_settings(object.printing_region(0));
+        const auto provider = object.voronoi_point_cloud(settings);
+        REQUIRE(object.voronoi_point_cloud(settings) == provider);
     }
 }
 

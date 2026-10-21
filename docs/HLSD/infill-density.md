@@ -34,17 +34,38 @@ each pattern's frequency calibration and blends fixed lattice levels, extending
 beyond the surface/interior range for reinforcement. Spatial variation does not
 directly rescale lattice coordinates. Zero-density regions produce no infill.
 
-With zero sigma, Smooth blend uses TPMS depth directly.
+With zero sigma and no fused modifiers, Smooth blend uses TPMS depth directly.
+
+## Fused modifiers
+
+Compositing material density uses a float grid only when a participating modifier
+is present. Modifier targets are evaluated from their own settings and blended
+without density encoding or quantization. Queries interpolate the resulting
+material fractions.
+
+Material density blend width is available on modifiers with a Voronoi or
+Smooth blend TPMS/Gyroid parent. Negative values retain independent print
+regions. Zero replaces density at field resolution; positive values blend
+entirely inside the modifier with smoothstep, reaching its target at the
+specified inward distance.
+
+Surface density, adaptive mode, interior density, gradient and corner smoothing remain editable;
+other settings inherit the parent while fusion is enabled. Modifiers use the
+parent's physical distance and adaptive spatial fields. Their own sides, floor and
+ceiling determine blend distance. Fields blend successively in Orca's modifier
+order without splitting the parent's infill into separate regions.
 
 ## Distance calculation
 
-Adaptive infill and corner reinforcement share the
+Adaptive infill, corner reinforcement and fused material density share the
 object's adaptive voxel geometry. The existing raster and distance transform
 supply interior distances. Consumers needing signed distances additionally
 transform the exterior, preserving the interior costs used by adaptive grading.
+Modifier blend masks use the same voxel calculation.
 
 The grid starts at 0.5 mm spacing and coarsens to stay within about one million
-nodes. Narrow features and gaps smaller than a voxel may disappear; corner reinforcement have this resolution limit too.
+nodes. Narrow features and gaps smaller than a voxel may disappear; snapping,
+blend boundaries and corner reinforcement have this resolution limit too.
 When grid spacing approaches Gaussian sigma, smoothing becomes less accurate.
 Normal X/Y/Z measure within their sections; physical corner reinforcement uses
 three-dimensional distances. Density settings reuse the object's immutable grid.

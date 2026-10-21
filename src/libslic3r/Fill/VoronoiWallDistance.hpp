@@ -16,6 +16,7 @@ namespace Slic3r::Voronoi {
 struct PointCloudSettings {
     InfillDensitySettings density;
     double site_spacing = 0.;
+    int region_id = -1;
 };
 
 // Owned by a PrintObject. Initialization is serialized; providers and distance
@@ -23,13 +24,14 @@ struct PointCloudSettings {
 class WallDistanceCloudCache {
 public:
     std::shared_ptr<const PointCloudProvider> get(const std::function<std::vector<WallSlice>()> &load_slices,
-        const PointCloudSettings &settings = {}, const WallDistanceProgress &progress = {});
+        const PointCloudSettings &settings = {}, const WallDistanceProgress &progress = {},
+        const std::vector<DensityModifier> &modifiers = {});
     InfillDensityCache &density_fields() { return m_fields; }
     void clear();
 private:
     std::mutex m_mutex;
     InfillDensityCache m_fields;
-    std::map<std::tuple<AdaptiveInfillMode, double, double, double, AdaptiveInfillGradient>, std::shared_ptr<const PointCloudProvider>> m_providers;
+    std::map<std::tuple<AdaptiveInfillMode, double, double, int, double, AdaptiveInfillGradient>, std::shared_ptr<const PointCloudProvider>> m_providers;
 };
 
 } // namespace Slic3r::Voronoi

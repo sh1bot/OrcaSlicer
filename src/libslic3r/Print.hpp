@@ -332,6 +332,8 @@ public:
         std::vector<PaintedRegion>          painted_regions;
         std::vector<FuzzySkinPaintedRegion> fuzzy_skin_painted_regions;
 
+        int density_modifier_parent(int index) const;
+
         bool has_volume(const ObjectID id) const {
             auto it = lower_bound_by_predicate(this->volumes.begin(), this->volumes.end(), [id](const VolumeExtents &l) { return l.volume_id < id; });
             return it != this->volumes.end() && it->volume_id == id;
@@ -461,7 +463,8 @@ public:
     size_t 			total_layer_count() const { return this->layer_count() + this->support_layer_count(); }
     size_t 			layer_count() const { return m_layers.size(); }
     void 			clear_layers();
-    std::shared_ptr<const InfillDensityField> infill_density_field(const InfillDensitySettings &settings) const;
+    int infill_density_region(int region_id) const;
+    std::shared_ptr<const InfillDensityField> infill_density_field(const InfillDensitySettings &settings, int region_id = -1) const;
     WallDistanceProgress infill_preparation_progress() const;
     bool needs_signed_infill_distances() const;
     bool prepare_infill_point_clouds();
@@ -590,6 +593,7 @@ public:
 
 private:
     mutable Voronoi::WallDistanceCloudCache m_voronoi_cloud_cache;
+    std::vector<DensityModifier> m_infill_density_modifiers;
     void make_perimeters();
     void prepare_infill();
     void infill();

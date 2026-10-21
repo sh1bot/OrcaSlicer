@@ -1,3 +1,5 @@
+#include "catch2/generators/catch_generators.hpp"
+#include "libslic3r/InfillDensityModifier.hpp"
 #include <limits>
 // Regression test for the "option in def + UI but missing from preset key list"
 // crash class.
@@ -81,6 +83,9 @@ TEST_CASE("Print presets initialize and retain shared Voronoi density settings a
 {
     DynamicPrintConfig config;
     config.apply_only(FullPrintConfig::defaults(), Preset::print_options());
+    REQUIRE_THAT(config.opt_float("infill_modifier_blend"), Catch::Matchers::WithinAbs(-1., EPSILON));
+    config.set_deserialize_strict("infill_modifier_blend", "4");
+    REQUIRE_THAT(config.opt_float("infill_modifier_blend"), Catch::Matchers::WithinAbs(4., EPSILON));
     REQUIRE_THAT(config.opt_float("adaptive_infill_interior_density"), Catch::Matchers::WithinAbs(5., EPSILON));
     REQUIRE(config.opt_enum<AdaptiveInfillGradient>("adaptive_infill_gradient") == AdaptiveInfillGradient::Linear);
     REQUIRE_THAT(config.opt_float("infill_smoothing_sigma"), Catch::Matchers::WithinAbs(0., EPSILON));
@@ -90,9 +95,51 @@ TEST_CASE("Print presets initialize and retain shared Voronoi density settings a
     REQUIRE_THAT(config.opt_float("infill_smoothing_sigma"), Catch::Matchers::WithinAbs(12., EPSILON));
 }
 
+TEST_CASE("Fused modifiers keep density controls and preserve inactive overrides", "[Preset][FillVoronoi]")
+{
+    const double blend = GENERATE(-1., 0., 4.);
+    DynamicPrintConfig config;
+    config.set_deserialize_strict({{"sparse_infill_density", "50%"},
+        {"infill_smoothing_sigma", "4"}, {"wall_loops", "3"}, {"fill_multiline", "2"}, {"sparse_infill_pattern", "cubic"}});
+    config.set_key_value("infill_modifier_blend", new ConfigOptionFloat(blend));
+    const auto effective = Slic3r::effective_density_modifier_config(config);
+    REQUIRE(Slic3r::fused_density_modifier(effective) == (blend >= 0.));
+    REQUIRE_THAT(effective.opt_float("sparse_infill_density"), Catch::Matchers::WithinAbs(50., EPSILON));
+    REQUIRE_THAT(effective.opt_float("infill_smoothing_sigma"), Catch::Matchers::WithinAbs(4., EPSILON));
+    for (const std::string key : {"wall_loops", "fill_multiline", "sparse_infill_pattern"}) {
+        REQUIRE(effective.has(key) == (blend < 0.));
+        REQUIRE(config.has(key));
+    }
+    REQUIRE(config.opt_int("wall_loops") == 3);
+    REQUIRE(config.opt_int("fill_multiline") == 2);
+    config.set_key_value("infill_modifier_blend", new ConfigOptionFloat(-1.));
+    const auto restored = Slic3r::effective_density_modifier_config(config);
+    REQUIRE(restored.opt_int("wall_loops") == 3);
+    REQUIRE(restored.opt_int("fill_multiline") == 2);
+    REQUIRE(restored.opt_enum<InfillPattern>("sparse_infill_pattern") == ipCubic);
+    REQUIRE(Slic3r::valid_density_modifier_blend(config));
+    config.set_key_value("infill_modifier_blend", new ConfigOptionFloat(std::numeric_limits<double>::infinity()));
+    REQUIRE_FALSE(Slic3r::valid_density_modifier_blend(config));
+}
+
+TEST_CASE("Modifier fusion eligibility reads percentage density from mutable parent settings", "[PresetOptions][Regression]")
+{
+    const auto pattern = GENERATE(ipVoronoi, ipGyroid, ipTpmsD, ipTpmsFK, ipCubic);
+    const auto mode = GENERATE(AdaptiveInfillMode::Disabled, AdaptiveInfillMode::SmoothBlend);
+    const double density = GENERATE(0., 15., 100.);
+    DynamicConfig parent;
+    parent.set_key_value("sparse_infill_pattern", new ConfigOptionEnumGeneric(nullptr, int(pattern)));
+    parent.set_key_value("adaptive_infill_mode", new ConfigOptionEnumGeneric(nullptr, int(mode)));
+    parent.set_key_value("sparse_infill_density", new ConfigOptionPercent(density));
+    const bool expected = density > 0. && (pattern == ipVoronoi ||
+        (is_adaptive_infill_pattern(pattern) && mode == AdaptiveInfillMode::SmoothBlend && density < 100.));
+    REQUIRE(supports_density_field(parent) == expected);
+}
+
 TEST_CASE("Earlier development density keys load into the shared infill settings", "[Preset][Config]")
 {
     DynamicPrintConfig config;
-    config.set_deserialize_strict({{"voronoi_smoothing_sigma", "3"}});
+    config.set_deserialize_strict({{"voronoi_smoothing_sigma", "3"}, {"voronoi_modifier_blend", "2"}});
     REQUIRE_THAT(config.opt_float("infill_smoothing_sigma"), Catch::Matchers::WithinAbs(3., EPSILON));
+    REQUIRE_THAT(config.opt_float("infill_modifier_blend"), Catch::Matchers::WithinAbs(2., EPSILON));
 }
