@@ -442,7 +442,7 @@ coordf_t Layer::get_sparse_infill_max_void_area()
         InfillPattern pattern = config.sparse_infill_pattern;
         if (density == 0.)
             return -1;
-        // Orca: the adaptive TPMS infill is as sparse as its interior density.
+        // Adaptive infill can be as sparse as its interior density.
         if (density < 100.f && config.adaptive_infill_mode != AdaptiveInfillMode::Disabled && is_adaptive_infill_pattern(pattern))
             density = std::min(density, std::max(1.f, float(config.adaptive_infill_interior_density)));
 

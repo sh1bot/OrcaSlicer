@@ -62,4 +62,10 @@ use the same nominal region flow and cloud settings, so first-layer widths and a
 layer heights do not move points.
 Layer completion reports throttled progress and checks cancellation.
 
+## Spatial density
+
+The [shared material-density field](infill-density.md) grades point density by
+wall depth or lobe/section profiles when Adaptive density is enabled. Disabled
+gives a uniform cloud without preparing a distance field.
+
 Point ingestion advances in complete generation cubes. Sites remain unchanged between batches; obsolete lower cube rows are retired immediately before the next batch is generated. The persistent Delaunay network removes those vertices before inserting new ones.

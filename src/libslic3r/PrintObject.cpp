@@ -1,3 +1,4 @@
+#include "InfillDensityField.hpp"
 #include "ExPolygon.hpp"
 #include "Config.hpp"
 #include "Exception.hpp"
@@ -36,6 +37,7 @@
 #include "Fill/VoronoiInfill.hpp"
 #include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
+#include "libslic3r/Fill/VoronoiWallDistance.hpp"
 #include "format.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -804,6 +806,37 @@ static size_t infill_layer_grain_size(size_t count, bool reuse_network)
     return reuse_network ? std::min(maximum_batch, std::max(size_t(1), (count + tasks - 1) / tasks)) : 1;
 }
 
+bool PrintObject::prepare_infill_point_clouds()
+{
+    bool warned_point_count = false;
+    bool has_voronoi = false;
+    // Build shared distance fields before workers start reporting completed
+    // layers. This also avoids workers waiting behind table initialization.
+    for (size_t region_id = 0; region_id < num_printing_regions(); ++region_id) {
+        const PrintRegionConfig &config = printing_region(region_id).config();
+        const size_t object_region = printing_region(region_id).print_object_region_id();
+        if (std::none_of(m_layers.begin(), m_layers.end(), [object_region](const Layer *layer) {
+                return !layer->regions()[object_region]->slices.empty();
+            })) continue;
+        if (config.sparse_infill_density > 0 && config.sparse_infill_pattern == ipVoronoi) {
+            has_voronoi = true;
+            const auto density = InfillDensitySettings::from_config(config);
+            double maximum_density = density.mode != AdaptiveInfillMode::Disabled ? std::max(density.material_density, density.interior_density) : density.material_density;
+            const double candidate_spacing = Voronoi::PoissonPointCloud::nominal_spacing(
+                printing_region(region_id).flow(*this, frInfill, m_config.layer_height.value).spacing() * config.fill_multiline.value,
+                m_config.layer_height.value, std::min(1., maximum_density));
+            const Vec3d extent = m_size.cast<double>() * SCALING_FACTOR;
+            if (!warned_point_count && extent.prod() / std::pow(candidate_spacing, 3) > 1000000.) {
+                active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
+                    L("Voronoi infill may generate a large point cloud and require substantial memory. Consider increasing Fill Multiline for thicker walls with fewer cells. This estimate uses the densest material setting."));
+                warned_point_count = true;
+            }
+            voronoi_point_cloud(voronoi_cloud_settings(printing_region(region_id)));
+        }
+    }
+    return has_voronoi;
+}
+
 void PrintObject::infill()
 {
     // prerequisites
@@ -812,10 +845,7 @@ void PrintObject::infill()
     if (this->set_started(posInfill)) {
         m_print->set_status(35, L("Generating infill toolpath"));
 
-        bool has_voronoi = false;
-        for (size_t i = 0; i < num_printing_regions(); ++i)
-            has_voronoi |= printing_region(i).config().sparse_infill_pattern == ipVoronoi;
-
+        const bool has_voronoi = prepare_infill_point_clouds();
         size_t completed_layers = 0;
         std::mutex progress_mutex;
         auto last_report = std::chrono::steady_clock::now();
@@ -1290,30 +1320,46 @@ AdaptiveInfillFields PrintObject::prepare_adaptive_infill_fields() const
     std::array<bool, size_t(AdaptiveInfillMode::Count)> modes{};
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
         if (const PrintRegionConfig &config = this->printing_region(region_id).config();
-            config.sparse_infill_density > 0 && config.sparse_infill_density < 100 && is_adaptive_infill_pattern(config.sparse_infill_pattern))
+            config.sparse_infill_pattern != ipVoronoi && config.sparse_infill_density > 0 && config.sparse_infill_density < 100 && is_adaptive_infill_pattern(config.sparse_infill_pattern))
             modes[size_t(config.adaptive_infill_mode.value)] = true;
     modes[size_t(AdaptiveInfillMode::Disabled)] = false;
     if (std::find(modes.begin(), modes.end(), true) == modes.end() || m_layers.empty())
         return fields;
 
-    std::vector<AdaptiveInfillField::Slice> slices;
-    slices.reserve(m_layers.size());
-    BoundingBox bbox;
-    for (const Layer *layer : m_layers) {
-        slices.push_back({layer->bottom_z(), layer->print_z, &layer->lslices});
-        bbox.merge(get_extents(layer->lslices));
-    }
-    if (!bbox.defined)
-        return fields;
+    const auto load_slices = [this] {
+        std::vector<WallSlice> slices;
+        for (const Layer *layer : m_layers) slices.push_back({layer->bottom_z(), layer->print_z, &layer->lslices});
+        return slices;
+    };
+    const bool signed_distances = false;
     for (size_t mode = 0; mode < modes.size(); ++mode) {
-        if (!modes[mode])
-            continue;
-        // Without a field, the infill falls back to the regular pattern.
-        auto field = std::make_unique<AdaptiveInfillField>(slices, bbox, AdaptiveInfillMode(mode), [this]() { m_print->throw_if_canceled(); });
-        if (!field->empty())
-            fields[mode] = std::move(field);
+        if (!modes[mode]) continue;
+        const auto field = m_voronoi_cloud_cache.density_fields().geometry(load_slices, AdaptiveInfillMode(mode),
+            signed_distances, infill_preparation_progress());
+        if (!field->empty() || AdaptiveInfillMode(mode) == AdaptiveInfillMode::SmoothBlend) fields[mode] = field;
     }
     return fields;
+}
+
+
+WallDistanceProgress PrintObject::infill_preparation_progress() const
+{
+    const int percent = is_step_done(posPrepareInfill) ? 35 : 25;
+    return [this, percent, last_report = std::chrono::steady_clock::now(), last_stage = WallDistanceStage::Complete](WallDistanceStage stage, double fraction) mutable {
+            m_print->throw_if_canceled();
+            const auto now = std::chrono::steady_clock::now();
+            if (stage == last_stage && fraction < 1. && now - last_report < std::chrono::milliseconds(250)) return;
+            std::string message;
+            switch (stage) {
+            case WallDistanceStage::Distance: message = L("Building infill wall distances"); break;
+            case WallDistanceStage::Encoding: message = L("Encoding infill wall distances"); break;
+            case WallDistanceStage::Complete: message = L("Finalizing infill wall distances"); break;
+            default: return;
+            }
+            m_print->set_status(percent, message + " (" + std::to_string(int(100. * fraction)) + "%)");
+            last_report = now;
+            last_stage = stage;
+        };
 }
 
 double PrintObject::voronoi_site_spacing(const PrintRegion &region) const
@@ -1324,9 +1370,27 @@ double PrintObject::voronoi_site_spacing(const PrintRegion &region) const
         m_config.layer_height.value, 0.01 * config.sparse_infill_density.value);
 }
 
+Voronoi::PointCloudSettings PrintObject::voronoi_cloud_settings(const PrintRegion &region) const
+{
+    const auto &config = region.config();
+    Voronoi::PointCloudSettings settings;
+    settings.density = InfillDensitySettings::from_config(config);
+    settings.site_spacing = voronoi_site_spacing(region);
+    return settings;
+}
+
+std::shared_ptr<const Voronoi::PointCloudProvider> PrintObject::voronoi_point_cloud(const Voronoi::PointCloudSettings &settings) const
+{
+    return m_voronoi_cloud_cache.get([this] {
+        std::vector<WallSlice> slices;
+        for (const Layer *layer : layers()) slices.push_back({layer->bottom_z(), layer->print_z, &layer->lslices});
+        return slices;
+    }, settings, infill_preparation_progress());
+}
 
 void PrintObject::clear_layers()
 {
+    m_voronoi_cloud_cache.clear();
     if (!m_shared_object) {
         for (Layer *l : m_layers)
             delete l;
@@ -1679,6 +1743,7 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (
                opt_key == "interface_shells"
             || opt_key == "infill_multiline"
+            || opt_key == "fill_multiline"
             || opt_key == "infill_combination"
             || opt_key == "infill_combination_max_layer_height"
             || opt_key == "bottom_shell_thickness"
@@ -1901,11 +1966,13 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
 		invalidated |= this->invalidate_steps({ posPrepareInfill, posInfill, posIroning, posContouring, posSimplifyPath, posSimplifyInfill });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
     } else if (step == posPrepareInfill) {
+        m_voronoi_cloud_cache.clear();
         invalidated |= this->invalidate_steps({ posInfill, posIroning, posContouring, posSimplifyPath, posSimplifyInfill });
     } else if (step == posInfill) {
         invalidated |= this->invalidate_steps({ posIroning, posContouring, posSimplifyInfill });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
     } else if (step == posSlice) {
+        m_voronoi_cloud_cache.clear();
         // posSimplifySupportPath is listed with posSupportMaterial: invalidate_steps() does not
         // propagate, so without it a re-slice regenerated the supports but kept the step done,
         // and the new support paths were exported unsimplified, unlike a fresh slice.
@@ -1943,6 +2010,7 @@ bool PrintObject::invalidate_all_steps()
     const bool inherited_invalidated = Inherited::invalidate_all_steps();
     const bool print_invalidated     = m_print->invalidate_all_steps();
     bool result = inherited_invalidated || print_invalidated;
+    m_voronoi_cloud_cache.clear();
 	// Then reset some of the depending values.
 	m_slicing_params.valid = false;
 	m_belt_floor_z_shift_cache_valid = false;
@@ -3356,9 +3424,7 @@ void PrintObject::bridge_over_infill()
             layers_to_generate_infill.push_back(pair.first - 1);
         }
 
-        bool has_voronoi = false;
-        for (size_t i = 0; i < num_printing_regions(); ++i)
-            has_voronoi |= printing_region(i).config().sparse_infill_pattern == ipVoronoi;
+        const bool has_voronoi = !layers_to_generate_infill.empty() && prepare_infill_point_clouds();
         tbb::parallel_for(tbb::blocked_range<size_t>(0, layers_to_generate_infill.size(),
             infill_layer_grain_size(layers_to_generate_infill.size(), has_voronoi)), [po = static_cast<const PrintObject *>(this),
                                                                                             &layers_to_generate_infill,

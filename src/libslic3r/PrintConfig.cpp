@@ -248,6 +248,7 @@ static t_config_enum_values s_keys_map_PowerLossRecoveryMode {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(PowerLossRecoveryMode)
 
+
 static t_config_enum_values s_keys_map_CenterOfSurfacePattern{
     {"each_surface", int(CenterOfSurfacePattern::Each_Surface)},
     {"each_model", int(CenterOfSurfacePattern::Each_Model)},
@@ -391,6 +392,7 @@ static t_config_enum_values s_keys_map_AdaptiveInfillGradient{
     { "exponential", int(AdaptiveInfillGradient::Exponential) },
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(AdaptiveInfillGradient)
+
 
 //BBS
 static t_config_enum_values s_keys_map_PrintSequence {
@@ -3670,7 +3672,8 @@ void PrintConfigDef::init_fff_params()
     def             = this->add("adaptive_infill_mode", coEnum);
     def->label      = L("Adaptive density (experimental)");
     def->category   = L("Strength");
-    def->tooltip    = L("Grades the Gyroid and TPMS infill inside the object: its cells grow from the surface of the "
+    def->tooltip    = L("Disabled keeps the base infill density constant. Voronoi uses these modes to grade point density: Distance warp, Smooth blend and Stepped shells give the same continuous wall-depth profile; Lobes and Normal X/Y/Z use their respective lobe or section profiles. Voronoi does not warp coordinates or blend periodic lattices.\n"
+                        "Grades the Gyroid and TPMS infill inside the object: its cells grow from the surface of the "
                         "object towards its center. The sparse infill density is used at the surface and the interior "
                         "density at the center.\n"
                         "Distance warp, Smooth blend and Stepped shells follow the distance to the nearest surface, "
@@ -3708,7 +3711,7 @@ void PrintConfigDef::init_fff_params()
     def             = this->add("adaptive_infill_interior_density", coPercent);
     def->label      = L("Interior density");
     def->category   = L("Strength");
-    def->tooltip    = L("Density of the adaptive infill at the center of the object.");
+    def->tooltip    = L("Interior density for adaptive infill. Distance modes reach this density at the deepest point of each connected body; Lobes and Normal modes reach it at their lobe or section centers.");
     def->sidetext   = "%";
     def->min        = 1;
     def->max        = 100;
@@ -3718,7 +3721,7 @@ void PrintConfigDef::init_fff_params()
     def             = this->add("adaptive_infill_gradient", coEnum);
     def->label      = L("Adaptive gradient");
     def->category   = L("Strength");
-    def->tooltip    = L("How the density changes from the surface to the center of the object.\n"
+    def->tooltip    = L("How the density changes from the surface to the interior. Distance modes use depth within each connected body; Lobes and Normal modes use depth towards their lobe or section centers.\n"
                         "Linear: the density changes at a constant rate.\n"
                         "Quadratic: the density stays close to the sparse infill density near the surface and "
                         "changes faster towards the center.\n"
@@ -9659,6 +9662,7 @@ void PrintConfigDef::init_sla_params()
 
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
 {
+
     //BBS: handle legacy options
     if (opt_key == "curr_bed_type" && value == "SuperTack Plate") {
         value = "Supertack Plate";
@@ -9910,7 +9914,7 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
     // Ignore the following obsolete configuration keys:
     static std::set<std::string> ignore = {
         "acceleration", "scale", "rotate", "duplicate", "duplicate_grid",
-        "bed_size",
+        "bed_size", "adaptive_infill_distance",
         "print_center", "g0", "wipe_tower_per_color_wipe", 
         "support_sharp_tails","support_remove_small_overhangs", "support_with_sheath",
         "tree_support_collision_resolution", "tree_support_with_infill",

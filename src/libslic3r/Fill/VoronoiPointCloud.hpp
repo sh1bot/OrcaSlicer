@@ -2,11 +2,14 @@
 
 #include "../BoundingBox.hpp"
 #include "libslic3r/Point.hpp"
+#include "../InfillDensityField.hpp"
+#include "libslic3r/PrintConfig.hpp"
 #include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <vector>
+#include <utility>
 #include <cstddef>
 
 namespace Slic3r::Voronoi {
@@ -35,6 +38,23 @@ public:
         { return nominal_spacing(extrusion_spacing, nominal_height, density); }
     std::vector<Vec3d> points_in(const BoundingBoxf3 &box, double spacing) const override;
     std::vector<Vec3d> points_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const override;
+protected:
+    std::vector<Vec3d> candidates_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const;
+    std::vector<Vec3d> candidates_in(const BoundingBoxf3 &box, double spacing) const;
+};
+
+using WallDistanceSamples = std::function<std::vector<InfillDensitySample>(const std::vector<Vec3d> &)>;
+
+class WallDistancePointCloud : public PoissonPointCloud {
+public:
+    explicit WallDistancePointCloud(WallDistanceSamples samples, double maximum_ratio = 1.);
+    std::vector<Vec3d> points_in(const BoundingBoxf3 &box, double spacing) const override;
+    std::vector<Vec3d> points_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const override;
+    double cell_size(double spacing) const override { return 2. * spacing / m_maximum_ratio; }
+protected:
+    std::vector<Vec3d> thin(std::vector<Vec3d> candidates) const;
+    WallDistanceSamples m_samples;
+    double m_maximum_ratio;
 };
 
 // Owns ingestion and retirement, independently of the distribution and routing.
