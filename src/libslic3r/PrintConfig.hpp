@@ -96,11 +96,13 @@ enum class TopSurfaceExpansionDirection {
     Outward,
 };
 
+
 enum class CenterOfSurfacePattern {
     Each_Surface,
     Each_Model,
     Each_Assembly,
 };
+
 
 enum class NoiseType {
     Classic,
@@ -175,7 +177,7 @@ inline bool is_separable_infill_pattern(InfillPattern pattern)
 // Orca: Infill patterns laid out by an octree, which each connected body always gets of its own.
 inline bool is_octree_infill_pattern(InfillPattern pattern) { return pattern == ipAdaptiveCubic || pattern == ipSupportCubic; }
 // Orca: Infill patterns graded by the "adaptive_infill_mode" option.
-inline bool is_adaptive_infill_pattern(InfillPattern pattern) { return pattern == ipGyroid || pattern == ipTpmsD || pattern == ipTpmsFK; }
+inline bool is_adaptive_infill_pattern(InfillPattern pattern) { return pattern == ipVoronoi || pattern == ipGyroid || pattern == ipTpmsD || pattern == ipTpmsFK; }
 
 // Orca: Infill patterns that round their corners by the "sparse_infill_smooth_factor" option.
 // Grid, Triangles and Tri-hexagon only do so in their trapezoidal form, which is generated with more
@@ -300,6 +302,7 @@ enum class AdaptiveInfillMode {
     NormalX,
     Count,
 };
+
 
 // Orca: how the adaptive infill density changes from the object surface to its deepest point.
 enum class AdaptiveInfillGradient {

@@ -152,16 +152,6 @@ constexpr int Samples = 32;
 
 
 
-// Scale of the pattern relative to the surface at a depth from 0 at the surface to 1 at the deepest point.
-double target_scale(double ratio, AdaptiveInfillGradient gradient, double depth)
-{
-    switch (gradient) {
-    case AdaptiveInfillGradient::Quadratic: return 1. + (ratio - 1.) * depth * depth;
-    case AdaptiveInfillGradient::Exponential: return std::pow(ratio, depth);
-    default: return 1. + (ratio - 1.) * depth;
-    }
-}
-
 // Levels of Stepped shells and Smooth blend, geometric from the surface at 0 to the interior at count, and the
 // continuous level of the target of a depth.
 struct DensityLevels
@@ -173,7 +163,7 @@ struct DensityLevels
     double scale(int level) const { return count == 0 ? 1. : std::pow(ratio, double(level) / count); }
     double level(double depth) const
     {
-        return count == 0 ? 0. : count * std::log(target_scale(ratio, gradient, depth)) / std::log(ratio);
+        return count == 0 ? 0. : count * std::log(adaptive_density_scale(ratio, gradient, depth)) / std::log(ratio);
     }
 
     double               ratio;
@@ -190,7 +180,7 @@ public:
     RadialScale(const AdaptiveTpms &tpms, int dimensions) : m_dimensions(dimensions)
     {
         const double ratio  = std::max(tpms.interior_frequency / tpms.surface_frequency, 1e-3);
-        auto         target = [&tpms, ratio](double depth) { return target_scale(ratio, tpms.gradient, depth); };
+        auto         target = [&tpms, ratio](double depth) { return adaptive_density_scale(ratio, tpms.gradient, depth); };
         m_scale[0]    = target(1.);
         double volume = 0.;
         for (size_t i = 1; i < m_scale.size(); ++i) {
