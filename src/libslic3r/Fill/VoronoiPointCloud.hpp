@@ -21,6 +21,9 @@ public:
     virtual ~PointCloudProvider() = default;
     virtual double spacing(double extrusion_spacing, double nominal_height, double density) const = 0;
     virtual std::vector<Vec3d> points_in(const BoundingBoxf3 &box, double spacing) const = 0;
+    // Preferred neighbour spacing for point relaxation, including outside the model.
+    virtual std::vector<double> local_spacing(const std::vector<Vec3d> &points, double nominal_spacing) const
+        { return std::vector<double>(points.size(), nominal_spacing); }
     // Whole-cell streaming uses this sampling frame, which preserves print Z.
     virtual BoundingBoxf3 generation_bounds(const BoundingBoxf3 &box) const { return box; }
     virtual double cell_size(double spacing) const { return 2. * spacing; }
@@ -51,6 +54,7 @@ public:
     std::vector<Vec3d> points_in(const BoundingBoxf3 &box, double spacing) const override;
     std::vector<Vec3d> points_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const override;
     double cell_size(double spacing) const override { return 2. * spacing / m_maximum_ratio; }
+    std::vector<double> local_spacing(const std::vector<Vec3d> &points, double nominal_spacing) const override;
 protected:
     std::vector<Vec3d> thin(std::vector<Vec3d> candidates) const;
     WallDistanceSamples m_samples;

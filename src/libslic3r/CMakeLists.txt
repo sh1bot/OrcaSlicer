@@ -205,10 +205,12 @@ set(lisbslic3r_sources
     Fill/VoronoiLattice.hpp
     Fill/VoronoiPointCloud.cpp
     Fill/VoronoiPointCloud.hpp
+    Fill/VoronoiRelaxation.hpp
     Fill/VoronoiRouting.cpp
     Fill/VoronoiRouting.hpp
     Fill/VoronoiWallDistance.cpp
     Fill/VoronoiWallDistance.hpp
+    Fill/VoronoiWallSnap.hpp
     FilamentMixer.cpp
     FilamentMixer.hpp
     FilamentMixerModel.hpp
@@ -644,6 +646,8 @@ cmake_policy(POP)
 add_library(libslic3r_cgal STATIC
     CutSurface.hpp CutSurface.cpp
     Fill/VoronoiInfillCgal.cpp
+    Fill/VoronoiRelaxation.cpp
+    Fill/VoronoiWallSnap.cpp
     IntersectionPoints.hpp IntersectionPoints.cpp
     MeshBoolean.hpp MeshBoolean.cpp
     MeshRepair.hpp MeshRepair.cpp

@@ -46,7 +46,8 @@ void FillVoronoi::_fill_surface_single(const FillParams &params, unsigned int,
     geometry.wall_count = params.multiline;
     geometry.point_spacing = point_spacing;
     Voronoi::Layer layer = m_infill->fill_geometry(bounding_box, expolygon, geometry);
-    layer.walls = m_infill->route_walls(std::move(layer.walls), layer_id);
+    if (m_shell_boundaries.empty())
+        layer.walls = m_infill->route_walls(std::move(layer.walls), layer_id);
     multiline_fill(layer.walls, params, float(params.flow.spacing()));
     if (params.multiline > 1)
         layer.walls = intersection_pl(std::move(layer.walls), expolygon);
@@ -54,8 +55,17 @@ void FillVoronoi::_fill_surface_single(const FillParams &params, unsigned int,
     // Exclude floor interiors, preserving walls exactly on their boundaries.
     for (const auto &band : layer.bands) append(excluded, offset_ex(band.polygon, -1.f));
     if (!excluded.empty()) layer.walls = diff_pl(layer.walls, excluded);
+    Points boundary_nodes;
+    if (!m_shell_boundaries.empty()) {
+        const auto centers = offset_ex(m_shell_boundaries, float(scale_(overlap - 0.5 * spacing)));
+        auto boundary = intersection_pl(to_polylines(centers), m_surface_boundary);
+        boundary_nodes = Voronoi::join_boundary(layer.walls, boundary);
+        layer.walls = m_infill->route_walls(std::move(layer.walls), layer_id, boundary_nodes);
+    }
     if (!params.dont_connect() && !layer.walls.empty()) {
         Polylines connected;
+        // Include the complete shell trace when trimming occupied boundary arcs.
+        // Its endpoints may lie beyond the generic half-spacing inset.
         connect_infill(std::move(layer.walls), to_polygons(expolygon),
                        m_surface_boundary.contour.bounding_box(), connected, params.flow.spacing(), params);
         layer.walls = std::move(connected);

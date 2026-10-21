@@ -85,6 +85,26 @@ above horizontal, below the usual 45-degree guideline. Complete Cubic faces
 incline about 55 degrees, making Cubic preferable for steeper walls. Thinning can
 introduce shallower faces. Neither distribution guarantees self-supporting infill.
 
+## Point adjustment and shell bonding
+
+Relaxation iterations defaults to zero and is limited to 50. Each iteration balances Delaunay edge
+lengths against local preferred spacing. Simultaneous damped steps are limited
+to 10% of nominal spacing; convex-hull sites remain fixed. The saved object-wide
+point cloud costs additional memory and computation and cannot eliminate
+every acute cell section. Preparation collects the point cloud through local
+slabs; relaxation itself operates on the complete saved point cloud.
+
+Snap points to walls defaults off. After relaxation, points within half the
+nominal spacing on either side of a wall take a bounded step toward the raw
+distance field's zero contour. Grid resolution, curves and corners limit
+accuracy. Relaxation and snapping preserve reproducible queries and leave the
+density field unchanged; either can alter face angles.
+
+Trace model shell defaults off. It adds one bead along the physical shell,
+including holes, and excludes modifier boundaries. Touching foam walls join
+the trace through cyclic junction routing, allowing trails to turn along the
+shell. Traces are clipped to the fill surface and add material.
+
 Point ingestion advances in complete generation cubes. Sites remain unchanged between batches; obsolete lower cube rows are retired immediately before the next batch is generated. The persistent Delaunay network removes those vertices before inserting new ones.
 
 Adaptive point selection reuses the object’s prepared spatial profile. A provider owns its density evaluator; direct profile evaluation has no separate result cache. Gaussian smoothing and modifier compositing cache their prepared buffers.
