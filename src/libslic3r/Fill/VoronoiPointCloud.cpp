@@ -143,6 +143,17 @@ std::vector<Vec3d> WallDistancePointCloud::thin(std::vector<Vec3d> candidates) c
     return retained;
 }
 
+std::vector<double> WallDistancePointCloud::local_spacing(const std::vector<Vec3d> &points, double nominal_spacing) const
+{
+    const auto fields = m_samples(points);
+    if (fields.size() != points.size()) throw std::invalid_argument("Invalid Voronoi material density samples");
+    std::vector<double> result;
+    result.reserve(fields.size());
+    for (const auto &field : fields)
+        result.push_back(nominal_spacing / std::max(field.density, 1e-12));
+    return result;
+}
+
 ActivePointCloud::ActivePointCloud(std::shared_ptr<const PointCloudProvider> provider) : m_provider(std::move(provider))
 {
     if (!m_provider) throw std::invalid_argument("Missing Voronoi point-cloud provider");

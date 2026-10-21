@@ -1371,7 +1371,7 @@ bool PrintObject::needs_signed_infill_distances() const
         const auto &config = printing_region(region).config();
         if (config.sparse_infill_density <= 0.) continue;
         if (config.sparse_infill_pattern == ipVoronoi && (config.adaptive_infill_mode != AdaptiveInfillMode::Disabled ||
-            config.infill_smoothing_sigma > 0.)) return true;
+            config.infill_smoothing_sigma > 0. || config.voronoi_snap_to_wall)) return true;
         if (is_adaptive_infill_pattern(config.sparse_infill_pattern) && config.adaptive_infill_mode == AdaptiveInfillMode::SmoothBlend &&
             config.infill_smoothing_sigma > 0.) return true;
     }
@@ -1393,6 +1393,7 @@ WallDistanceProgress PrintObject::infill_preparation_progress() const
             case WallDistanceStage::SmoothZ: message = L("Smoothing infill wall distances (Z)"); break;
             case WallDistanceStage::MaterialDensity: message = L("Preparing infill material density"); break;
             case WallDistanceStage::Modifiers: message = L("Blending infill material density modifiers"); break;
+            case WallDistanceStage::Relaxation: message = L("Relaxing Voronoi control points"); break;
             case WallDistanceStage::Complete: message = L("Finalizing infill wall distances"); break;
             default: return;
             }
@@ -1426,6 +1427,8 @@ Voronoi::PointCloudSettings PrintObject::voronoi_cloud_settings(const PrintRegio
     settings.density = InfillDensitySettings::from_config(config);
     settings.site_spacing = voronoi_site_spacing(region);
     settings.method = config.voronoi_cloud_method.value;
+    settings.relaxation_iterations = config.voronoi_relaxation_iterations.value;
+    settings.snap = config.voronoi_snap_to_wall.value;
     settings.region_id = infill_density_region(region.print_object_region_id());
     return settings;
 }
@@ -1844,6 +1847,7 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (opt_key == "infill_modifier_blend") {
             steps.emplace_back(posSlice);
         } else if (opt_key == "sparse_infill_pattern"
+                   || opt_key == "voronoi_relaxation_iterations" || opt_key == "voronoi_trace_shell" || opt_key == "voronoi_snap_to_wall"
                    || opt_key == "voronoi_cloud_method"
                    || opt_key == "infill_smoothing_sigma"
                    || opt_key == "adaptive_infill_mode"

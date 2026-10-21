@@ -318,6 +318,7 @@ struct SurfaceFillParams
     // Equal nominal point spacing allows perimeter-only regions to share infill.
     double voronoi_point_spacing = 0.;
     std::shared_ptr<const Voronoi::PointCloudProvider> voronoi_cloud;
+    bool voronoi_trace_shell = false;
     double infill_smoothing_sigma = 0.;
     int infill_density_region = -1;
 
@@ -370,6 +371,7 @@ struct SurfaceFillParams
 		RETURN_COMPARE_NON_EQUAL(gyroid_optimized);
         RETURN_COMPARE_NON_EQUAL(voronoi_point_spacing);
         RETURN_COMPARE_NON_EQUAL(voronoi_cloud);
+        RETURN_COMPARE_NON_EQUAL(voronoi_trace_shell);
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_mode);
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_interior_density);
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_gradient);
@@ -411,6 +413,7 @@ struct SurfaceFillParams
                 this->gyroid_optimized        == rhs.gyroid_optimized        &&
                 this->voronoi_point_spacing == rhs.voronoi_point_spacing &&
                 this->voronoi_cloud == rhs.voronoi_cloud &&
+                this->voronoi_trace_shell == rhs.voronoi_trace_shell &&
                 this->adaptive_infill_mode           == rhs.adaptive_infill_mode           &&
                 this->adaptive_infill_interior_density   == rhs.adaptive_infill_interior_density   &&
                 this->adaptive_infill_gradient  == rhs.adaptive_infill_gradient  &&
@@ -450,7 +453,11 @@ static void configure_infill(Fill &fill, const SurfaceFill &surface_fill, const 
     auto &voronoi = static_cast<FillVoronoi &>(fill);
     voronoi.point_spacing = params.voronoi_point_spacing;
     voronoi.set_point_cloud(params.voronoi_cloud, engines);
-
+    if (params.voronoi_trace_shell) {
+        ExPolygons boundaries;
+        for (const LayerRegion *region : layer.regions()) append(boundaries, region->fill_expolygons);
+        voronoi.set_shell_boundaries(union_ex(boundaries));
+    }
     if (layer.lower_layer) {
         // Perimeters are complete before parallel infill generation; lower-layer
         // infill is not. Use bead footprints rather than solid slice outlines.
@@ -1072,6 +1079,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                     params.voronoi_point_spacing = 0.;
                     params.voronoi_cloud.reset();
                 }
+                params.voronoi_trace_shell = params.pattern == ipVoronoi && region_config.voronoi_trace_shell;
 
                 // Orca: Pass through separated_infills only where it can move the pattern.
                 params.separated_infills = region_config.separated_infills && is_separable_infill_pattern(params.pattern) &&
