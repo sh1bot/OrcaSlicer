@@ -123,7 +123,7 @@ std::shared_ptr<const AdaptiveInfillField> InfillDensityCache::geometry(
 {
     const int axis = mode == AdaptiveInfillMode::NormalX ? 0 : mode == AdaptiveInfillMode::NormalY ? 1 : mode == AdaptiveInfillMode::NormalZ ? 2 : -1;
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto &field = m_geometry[{mode, signed_distances}];
+    auto &field = m_geometry[size_t(signed_distances)][size_t(mode)];
     if (!field) {
         const auto slices = load_slices();
         BoundingBox bbox;
@@ -164,7 +164,7 @@ std::shared_ptr<const InfillDensityField> InfillDensityCache::get(
 void InfillDensityCache::clear()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_geometry.clear();
+    m_geometry = {};
 }
 
 } // namespace Slic3r

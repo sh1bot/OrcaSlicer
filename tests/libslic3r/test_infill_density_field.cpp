@@ -195,3 +195,25 @@ TEST_CASE("Uniform material density retains its floating point value", "[InfillD
     REQUIRE_THAT(field->density(Vec3d(1.234, 3.456, 8.765)),
         Catch::Matchers::WithinRel(settings.material_density, 1e-12));
 }
+
+TEST_CASE("Object profile arrays expose the same geometry used by density evaluation", "[InfillDensityField][Regression]")
+{
+    const ExPolygons model {rectangle(-8., -8., 8., 8.)};
+    size_t loads = 0;
+    const auto slices = [&] { ++loads; return std::vector<WallSlice>{{0., 16., &model}}; };
+    InfillDensityCache cache;
+    const auto &profiles = cache.profiles(false);
+    const auto shape = cache.geometry(slices, AdaptiveInfillMode::SmoothBlend);
+    REQUIRE(profiles[size_t(AdaptiveInfillMode::SmoothBlend)] == shape);
+    const size_t initial_loads = loads;
+    InfillDensitySettings settings;
+    settings.mode = AdaptiveInfillMode::SmoothBlend;
+    cache.get(slices, settings);
+    REQUIRE(loads == initial_loads);
+    REQUIRE(profiles[size_t(settings.mode)] == shape);
+    cache.clear();
+    REQUIRE_FALSE(profiles[size_t(settings.mode)]);
+    const auto rebuilt = cache.geometry(slices, settings.mode);
+    REQUIRE(rebuilt != shape);
+    REQUIRE(profiles[size_t(settings.mode)] == rebuilt);
+}
