@@ -2978,6 +2978,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("voronoi_snap_to_wall", "strength_settings_infill#sparse-infill-pattern");
         optgroup->append_single_option_line("voronoi_hull_threshold", "strength_settings_infill#sparse-infill-pattern");
         optgroup->append_single_option_line("voronoi_trace_shell", "strength_settings_infill#sparse-infill-pattern");
+        optgroup->append_single_option_line("infill_slice_slab_distances", "strength_settings_patterns#adaptive-density");
         optgroup->append_single_option_line("infill_smoothing_sigma", "strength_settings_patterns#adaptive-density");
         optgroup->append_single_option_line("gyroid_optimized", "strength_settings_patterns#gyroid-optimized");
         optgroup->append_single_option_line("sparse_infill_smooth_factor", "strength_settings_infill#sparse-infill-smooth-factor");

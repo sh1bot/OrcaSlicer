@@ -42,6 +42,7 @@ add_executable(${_TEST_NAME}_tests
     test_fill_plane_path.cpp
     test_adaptive_infill_distance.cpp
     test_adaptive_infill_field.cpp
+    test_adaptive_infill_slice_slabs.cpp
     test_fill_tpms_density.cpp
     test_fill_voronoi.cpp
     test_fill_voronoi_surface.cpp

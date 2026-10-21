@@ -210,9 +210,13 @@ private:
 } // namespace
 
 AdaptiveInfillDistanceField::AdaptiveInfillDistanceField(const std::vector<Slice> &slices, const BoundingBox &bbox,
-    const std::function<void()> &throw_if_canceled, const Progress &progress, bool signed_distances, int normal_axis)
-    : m_signed(signed_distances)
+    const std::function<void()> &throw_if_canceled, const Progress &progress, bool signed_distances, int normal_axis, Method method)
+    : m_method(normal_axis < 0 ? method : Method::Voxel), m_signed(signed_distances)
 {
+    if (m_method == Method::SliceSlabs) {
+        build_slice_slabs(slices, bbox, throw_if_canceled, progress);
+        return;
+    }
     BoundingBox bounds = bbox;
     if (!bounds.defined)
         for (const auto &slice : slices) bounds.merge(get_extents(*slice.expolygons));

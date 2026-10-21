@@ -184,6 +184,7 @@ set(lisbslic3r_sources
     Fill/FillRectilinear.hpp
     Fill/AdaptiveInfillField.cpp
     Fill/AdaptiveInfillField.hpp
+    Fill/AdaptiveInfillSliceSlabs.cpp
     Fill/FillTpmsD.cpp
     Fill/FillTpmsD.hpp
     Fill/FillTpmsFK.cpp

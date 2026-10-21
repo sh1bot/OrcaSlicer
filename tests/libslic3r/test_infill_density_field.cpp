@@ -357,6 +357,28 @@ TEST_CASE("Normal density profiles stay constant along their selected axis", "[I
     REQUIRE(field.density(across) > field.density(center) + 0.03);
 }
 
+TEST_CASE("Infill density caches keep slice-slab and voxel backends separate", "[InfillDensityField]")
+{
+    const ExPolygons model {rectangle(-10., -10., 10., 10.)};
+    const auto slices = [&] { return std::vector<WallSlice>{{0., 20., &model}}; };
+    InfillDensityCache cache;
+    const auto voxel = cache.geometry(slices, AdaptiveInfillMode::SmoothBlend, true);
+    const auto slab = cache.geometry(slices, AdaptiveInfillMode::SmoothBlend, true, {}, true);
+    REQUIRE(voxel->distances().method() == AdaptiveInfillDistanceField::Method::Voxel);
+    REQUIRE(slab->distances().method() == AdaptiveInfillDistanceField::Method::SliceSlabs);
+    REQUIRE(cache.geometry(slices, AdaptiveInfillMode::SmoothBlend, true) == voxel);
+    REQUIRE(cache.geometry(slices, AdaptiveInfillMode::SmoothBlend, true, {}, true) == slab);
+    InfillDensitySettings settings;
+    settings.mode = AdaptiveInfillMode::SmoothBlend;
+    const auto first = cache.get(slices, settings);
+    settings.slice_slabs = true;
+    const auto second = cache.get(slices, settings);
+    REQUIRE(first != second);
+    REQUIRE(cache.get(slices, settings)->density(Vec3d(0., 0., 4.)) == second->density(Vec3d(0., 0., 4.)));
+    const auto planar = cache.geometry(slices, AdaptiveInfillMode::NormalZ, true, {}, true);
+    REQUIRE(planar->distances().method() == AdaptiveInfillDistanceField::Method::Voxel);
+}
+
 TEST_CASE("Adaptive density evaluates the upstream gradient at the query point", "[InfillDensityField]")
 {
     const ExPolygons model {rectangle(-10., -10., 10., 10.)};

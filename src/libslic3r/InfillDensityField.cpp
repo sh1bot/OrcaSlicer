@@ -116,16 +116,16 @@ std::vector<float> smoothed_distances(const AdaptiveInfillDistanceField &origina
 AdaptiveInfillFields density_geometry(InfillDensityCache &cache,
     const std::function<std::vector<WallSlice>()> &load_slices, AdaptiveInfillMode mode,
     const std::vector<DensityModifier> &modifiers, int region_id,
-    const WallDistanceProgress &progress)
+    const WallDistanceProgress &progress, bool slice_slabs = false)
 {
     AdaptiveInfillFields shapes;
-    shapes[size_t(AdaptiveInfillMode::SmoothBlend)] = cache.geometry(load_slices, AdaptiveInfillMode::SmoothBlend, true, progress);
+    shapes[size_t(AdaptiveInfillMode::SmoothBlend)] = cache.geometry(load_slices, AdaptiveInfillMode::SmoothBlend, true, progress, slice_slabs);
     const auto prepare = [&](AdaptiveInfillMode mode) {
         if (int(mode) < 0 || mode >= AdaptiveInfillMode::Count)
             throw std::invalid_argument("Invalid adaptive infill mode");
         if (mode == AdaptiveInfillMode::Disabled) return;
         const bool distance = mode == AdaptiveInfillMode::DistanceWarp || mode == AdaptiveInfillMode::SmoothBlend || mode == AdaptiveInfillMode::SteppedShells;
-        shapes[size_t(mode)] = distance ? shapes[size_t(AdaptiveInfillMode::SmoothBlend)] : cache.geometry(load_slices, mode, true, progress);
+        shapes[size_t(mode)] = distance ? shapes[size_t(AdaptiveInfillMode::SmoothBlend)] : cache.geometry(load_slices, mode, true, progress, slice_slabs);
     };
     prepare(mode);
     for (const auto &modifier : modifiers)
@@ -207,7 +207,7 @@ struct InfillDensityField::Data {
                 // Voxel cancellation probes may run concurrently on TBB workers.
                 std::lock_guard<std::mutex> lock(mask_progress_mutex);
                 report(progress, WallDistanceStage::Modifiers, double(modifier_index) / modifiers.size());
-            }, {}, true);
+            }, {}, true, -1, original.method());
             const bool own_smoothing = target_sigma != smoothing_sigma;
             const auto modifier_values = own_smoothing ? smoothed_distances(original, target_sigma, [&](auto, double) {
                 report(progress, WallDistanceStage::Modifiers, double(modifier_index) / modifiers.size());
@@ -323,11 +323,11 @@ double InfillDensityField::maximum_density() const { return m_data->maximum_rati
 
 std::shared_ptr<const AdaptiveInfillField> InfillDensityCache::geometry(
     const std::function<std::vector<WallSlice>()> &load_slices, AdaptiveInfillMode mode,
-    bool signed_distances, const WallDistanceProgress &progress)
+    bool signed_distances, const WallDistanceProgress &progress, bool slice_slabs)
 {
     const int axis = mode == AdaptiveInfillMode::NormalX ? 0 : mode == AdaptiveInfillMode::NormalY ? 1 : mode == AdaptiveInfillMode::NormalZ ? 2 : -1;
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto &field = m_geometry[size_t(signed_distances)][size_t(mode)];
+    auto &field = m_geometry[size_t(signed_distances) + 2 * size_t(slice_slabs)][size_t(mode)];
     if (!field) {
         const auto slices = load_slices();
         BoundingBox bbox;
@@ -345,13 +345,14 @@ std::shared_ptr<const AdaptiveInfillField> InfillDensityCache::geometry(
             std::lock_guard<std::mutex> guard(progress_mutex);
             report(progress, stage, fraction);
         };
-        auto &distances = m_distances[{axis, signed_distances}];
+        auto &distances = m_distances[{axis, signed_distances, slice_slabs && axis < 0}];
         if (!distances) {
             const auto distance_progress = [&](AdaptiveInfillDistanceField::Stage stage, double fraction) {
                 if (stage == AdaptiveInfillDistanceField::Stage::Distance) notify(WallDistanceStage::Distance, fraction);
                 else if (stage == AdaptiveInfillDistanceField::Stage::Encoding) notify(WallDistanceStage::Encoding, fraction / 2.);
             };
-            distances = std::make_shared<AdaptiveInfillDistanceField>(slices, bbox, cancel, distance_progress, signed_distances, axis);
+            distances = std::make_shared<AdaptiveInfillDistanceField>(slices, bbox, cancel, distance_progress, signed_distances, axis,
+                slice_slabs ? AdaptiveInfillDistanceField::Method::SliceSlabs : AdaptiveInfillDistanceField::Method::Voxel);
         }
         notify(WallDistanceStage::Encoding, 0.5);
         field = std::make_shared<AdaptiveInfillField>(slices, bbox, mode, cancel, distances);
@@ -363,14 +364,14 @@ std::shared_ptr<const InfillDensityField> InfillDensityCache::get(
     const std::function<std::vector<WallSlice>()> &load_slices, const InfillDensitySettings &s,
     const WallDistanceProgress &progress, const std::vector<DensityModifier> &modifiers, int region_id)
 {
-    auto shapes = density_geometry(*this, load_slices, s.mode, modifiers, region_id, progress);
+    auto shapes = density_geometry(*this, load_slices, s.mode, modifiers, region_id, progress, s.slice_slabs);
     const bool composited = std::any_of(modifiers.begin(), modifiers.end(),
         [region_id](const auto &modifier) { return modifier.region_id == region_id; });
     if (s.sigma == 0. && !composited)
         return std::make_shared<InfillDensityField>(std::vector<WallSlice>{}, 0., progress,
             s.mode, s.material_density, modifiers, region_id, s.interior_density, s.gradient, std::move(shapes));
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto &field = m_fields[{s.mode, s.sigma, s.material_density, region_id, s.interior_density, s.gradient}];
+    auto &field = m_fields[{s.mode, s.sigma, s.material_density, region_id, s.interior_density, s.gradient, s.slice_slabs}];
     if (!field)
         field = std::make_shared<InfillDensityField>(std::vector<WallSlice>{}, s.sigma, progress,
             s.mode, s.material_density, modifiers, region_id, s.interior_density, s.gradient, std::move(shapes));
