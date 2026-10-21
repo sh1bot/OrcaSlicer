@@ -1191,6 +1191,7 @@ static std::vector<std::string> s_Preset_print_options{
     "voronoi_cloud_method",
     "voronoi_relaxation_iterations",
     "voronoi_snap_to_wall",
+    "voronoi_hull_threshold",
     "voronoi_trace_shell",
     "infill_modifier_blend",
     "infill_smoothing_sigma",

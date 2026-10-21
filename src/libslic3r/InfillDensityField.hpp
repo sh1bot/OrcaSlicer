@@ -45,7 +45,7 @@ struct DensityModifier {
     std::optional<AdaptiveInfillMode> mode;
 };
 
-enum class WallDistanceStage { Distance, Encoding, SmoothXY, SmoothZ, MaterialDensity, Modifiers, Relaxation, Complete };
+enum class WallDistanceStage { Distance, Encoding, SmoothXY, SmoothZ, MaterialDensity, Modifiers, Relaxation, VoidRefinement, Complete };
 // Called synchronously during construction, including within long phases.
 // The callback may throw to cancel construction; no partial table is cached.
 using WallDistanceProgress = std::function<void(WallDistanceStage, double)>;

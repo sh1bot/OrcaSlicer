@@ -45,6 +45,7 @@ add_executable(${_TEST_NAME}_tests
     test_fill_tpms_density.cpp
     test_fill_voronoi.cpp
     test_fill_voronoi_surface.cpp
+    test_fill_voronoi_void.cpp
     test_geometry.cpp
     test_kdtree.cpp
     test_imex_arrange.cpp
