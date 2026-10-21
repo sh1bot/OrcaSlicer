@@ -858,6 +858,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     // gyroid_optimized only applies when the sparse infill pattern is gyroid without adaptive density;
     // hide the whole line otherwise.
     toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid && !have_adaptive_infill_mode);
+    toggle_line("voronoi_cloud_method", have_infill && pattern == ipVoronoi);
     toggle_line("infill_smoothing_sigma", have_infill && (shared_density_infill ||
         (have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") == AdaptiveInfillMode::SmoothBlend)));
 

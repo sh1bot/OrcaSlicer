@@ -373,6 +373,7 @@ struct SurfaceFillParams
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_mode);
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_interior_density);
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_gradient);
+
         RETURN_COMPARE_NON_EQUAL(infill_smoothing_sigma);
         RETURN_COMPARE_NON_EQUAL(infill_density_region);
         RETURN_COMPARE_NON_EQUAL(smooth_factor);
@@ -413,6 +414,7 @@ struct SurfaceFillParams
                 this->adaptive_infill_mode           == rhs.adaptive_infill_mode           &&
                 this->adaptive_infill_interior_density   == rhs.adaptive_infill_interior_density   &&
                 this->adaptive_infill_gradient  == rhs.adaptive_infill_gradient  &&
+
                 this->infill_smoothing_sigma == rhs.infill_smoothing_sigma &&
                 this->infill_density_region == rhs.infill_density_region &&
                 this->smooth_factor           == rhs.smooth_factor           &&

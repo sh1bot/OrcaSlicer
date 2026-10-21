@@ -18,6 +18,7 @@
 // DynamicConfig.
 
 #include <catch2/catch_all.hpp>
+#include "libslic3r/VoronoiCloudMethod.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_message.hpp>
@@ -89,6 +90,12 @@ TEST_CASE("Print presets initialize and retain shared Voronoi density settings a
     REQUIRE_THAT(config.opt_float("adaptive_infill_interior_density"), Catch::Matchers::WithinAbs(5., EPSILON));
     REQUIRE(config.opt_enum<AdaptiveInfillGradient>("adaptive_infill_gradient") == AdaptiveInfillGradient::Linear);
     REQUIRE_THAT(config.opt_float("infill_smoothing_sigma"), Catch::Matchers::WithinAbs(0., EPSILON));
+    REQUIRE(config.opt_enum<VoronoiCloudMethod>("voronoi_cloud_method") == VoronoiCloudMethod::Random);
+    config.set_deserialize_strict("voronoi_cloud_method", "fcc");
+    REQUIRE(config.opt_enum<VoronoiCloudMethod>("voronoi_cloud_method") == VoronoiCloudMethod::Fcc);
+    config.set_deserialize_strict("voronoi_cloud_method", "cubic");
+    REQUIRE(config.opt_enum<VoronoiCloudMethod>("voronoi_cloud_method") == VoronoiCloudMethod::Cubic);
+    REQUIRE(config.option("voronoi_cloud_method")->serialize() == "cubic");
     config.set_deserialize_strict("adaptive_infill_interior_density", "15%");
     config.set_deserialize_strict("infill_smoothing_sigma", "12");
     REQUIRE_THAT(config.opt_float("adaptive_infill_interior_density"), Catch::Matchers::WithinAbs(15., EPSILON));
