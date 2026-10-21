@@ -8,7 +8,8 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
-#include <map>
+#include <array>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -71,10 +72,12 @@ public:
     std::shared_ptr<const AdaptiveInfillField> geometry(const std::function<std::vector<WallSlice>()> &load_slices,
         AdaptiveInfillMode mode, bool signed_distances = false,
         const WallDistanceProgress &progress = {});
+    const AdaptiveInfillFields &profiles(bool signed_distances) const { return m_geometry[size_t(signed_distances)]; }
     void clear();
 private:
     std::mutex m_mutex;
-    std::map<std::pair<AdaptiveInfillMode, bool>, std::shared_ptr<const AdaptiveInfillField>> m_geometry;
+    // The object and density evaluators use these same prepared profile arrays.
+    std::array<AdaptiveInfillFields, 2> m_geometry;
 };
 
 } // namespace Slic3r

@@ -71,3 +71,5 @@ gives a uniform cloud without preparing a distance field.
 Point ingestion advances in complete generation cubes. Sites remain unchanged between batches; obsolete lower cube rows are retired immediately before the next batch is generated. The persistent Delaunay network removes those vertices before inserting new ones.
 
 Adaptive point selection reuses the object’s prepared spatial profile. A provider owns its density evaluator; direct profile evaluation has no separate result cache.
+
+The object and density evaluators share the same prepared adaptive profile arrays. The object borrows its selected array; clearing the density fields also clears those entries.
