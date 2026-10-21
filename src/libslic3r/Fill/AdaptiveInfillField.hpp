@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -14,8 +16,54 @@
 #include "../Point.hpp"
 #include "../Polyline.hpp"
 #include "../PrintConfig.hpp"
+#include <cstdint>
 
 namespace Slic3r {
+
+// Voxel distances used by adaptive infill. Signed sampling is negative inside.
+// Slices must be ordered, non-overlapping, and their expolygons valid during construction.
+class AdaptiveInfillDistanceField {
+public:
+    struct Slice { double bottom_z, top_z; const ExPolygons *expolygons; };
+    enum class Stage { Distance, Encoding, Complete };
+    using Progress = std::function<void(Stage, double)>;
+    struct Interpolation {
+        std::array<size_t, 8> indices {};
+        std::array<double, 8> weights {};
+        double outside = 0.;
+    };
+    static constexpr double far_distance = 1000.;
+    AdaptiveInfillDistanceField() = default;
+    explicit AdaptiveInfillDistanceField(const std::vector<Slice> &slices, const BoundingBox &bbox = {},
+        const std::function<void()> &throw_if_canceled = {}, const Progress &progress = {},
+        bool signed_distances = false, int normal_axis = -1);
+    // With the flag off, exterior nodes remain zero and only the interior transform runs.
+    bool has_signed_distances() const { return m_signed; }
+    bool empty() const { return node_count() == 0; }
+    double signed_distance(const Vec3d &point) const { return sample(interpolation(point)); }
+    double grid_spacing() const { return spacing; }
+    const Vec3d &grid_origin() const { return origin; }
+    const std::array<size_t, 3> &grid_size() const { return size; }
+    size_t node_count() const { return original->squared.size(); }
+    // Exact existing voxel-transform costs, before physical-distance conversion.
+    float squared_depth(size_t index) const { return is_inside(index) ? original->squared[index] : 0.f; }
+    bool is_inside(size_t index) const { return original->inside[index / 8] & (uint8_t(1) << (index % 8)); }
+    double node_value(size_t index) const {
+        const double d = std::min(far_distance, std::max(0., std::sqrt(double(original->squared[index])) - 0.5) * spacing);
+        return is_inside(index) ? -d : d;
+    }
+    // Reuse the same interpolation weights for fields built on this grid.
+    Interpolation interpolation(const Vec3d &point) const;
+    double sample(const Interpolation &where) const;
+    std::vector<double> sample(const std::vector<Vec3d> &points) const;
+private:
+    bool m_signed = false;
+    double spacing = 1.;
+    Vec3d origin = Vec3d::Zero();
+    std::array<size_t, 3> size {{0, 0, 0}};
+    struct Field { std::vector<uint8_t> inside; std::vector<float> squared; };
+    std::shared_ptr<Field> original = std::make_shared<Field>();
+};
 
 // Radial coordinate inside the lobes of the bodies of an object, sampled from its slices: 0 at the center of a
 // lobe, 1 at its surface. Lobes are parts of a body separated by a neck, like two spheres united. In the 2D modes,
@@ -24,12 +72,7 @@ namespace Slic3r {
 class AdaptiveInfillField
 {
 public:
-    struct Slice
-    {
-        coordf_t          bottom_z;
-        coordf_t          top_z;
-        const ExPolygons *expolygons;
-    };
+    using Slice = AdaptiveInfillDistanceField::Slice;
 
     struct Radial
     {
@@ -40,7 +83,7 @@ public:
 
     // Slices sorted by z, in the XY coordinates of the fill and the print Z.
     AdaptiveInfillField(const std::vector<Slice> &slices, const BoundingBox &bbox, AdaptiveInfillMode mode,
-                    const std::function<void()> &throw_if_canceled);
+                    const std::function<void()> &throw_if_canceled, std::shared_ptr<const AdaptiveInfillDistanceField> distances = {});
 
     // Lobes blended near the sides between them, from a body or from each of the two sections around a point.
     static constexpr size_t MaxMorph = 4;
@@ -61,6 +104,7 @@ public:
     // In the modes following the distance to the surface: depth relative to the deepest point of the body, from 0 at
     // the surface to 1.
     double depth(const Vec3d &pt) const;
+    const AdaptiveInfillDistanceField &distances() const { return *m_distances; }
 
 private:
     struct Lobe
@@ -91,6 +135,7 @@ private:
     static constexpr int Polar   = 24;
     static constexpr int Azimuth = 48;
 
+    std::shared_ptr<const AdaptiveInfillDistanceField> m_distances;
     AdaptiveInfillMode  m_mode;
     int               m_axis;
     Vec3d             m_origin;
