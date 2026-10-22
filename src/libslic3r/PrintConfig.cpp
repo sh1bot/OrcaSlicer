@@ -3822,7 +3822,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("infill_smoothing_sigma", coFloat);
     def->label = L("Corner smoothing sigma");
     def->category = L("Strength");
-    def->tooltip = L("Gaussian standard deviation for the wall-distance field. Larger values extend the corner density boost over a wider area. Zero disables smoothing. The filter extends to three times this distance.");
+    def->tooltip = L("Gaussian standard deviation for the wall-distance field. Larger values extend the corner density boost over a wider area. Zero disables smoothing.");
     def->sidetext = L("mm");
     def->min = 0.;
     def->max = InfillDensityField::maximum_smoothing_sigma;

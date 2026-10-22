@@ -184,7 +184,7 @@ TEST_CASE("Default density smoothing is disabled without disabling grading", "[I
     const InfillDensityField defaults({{0., 40., &model}});
     bool smoothed = false;
     const InfillDensityField explicit_zero({{0., 40., &model}}, 0., [&](auto stage, double) {
-        smoothed |= stage == WallDistanceStage::SmoothXY || stage == WallDistanceStage::SmoothZ;
+        smoothed |= stage == WallDistanceStage::SmoothDistance || stage == WallDistanceStage::SmoothReinforcement;
     });
     REQUIRE_FALSE(smoothed);
     REQUIRE_THAT(InfillDensitySettings{}.sigma, Catch::Matchers::WithinAbs(0., 1e-12));
