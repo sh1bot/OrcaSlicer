@@ -15,17 +15,18 @@ blend density contributions from neighbouring lobes or sections. None warp the
 Voronoi cloud coordinates. Corner reinforcement remains independent of
 this switch.
 
-Corner reinforcement compares a Gaussian-smoothed
-physical signed distance field with its original values. The difference boosts both convex and concave corners and
-may exceed surface density, capped at 100%. Sigma is in millimetres, defaults to zero (disabled), and is limited to 64 mm.
+Corner reinforcement takes the magnitude of local signed-distance deviations, then
+Gaussian-smooths that positive field. The final smoothing adds convex and concave
+contributions without sign cancellation. The adjustment may exceed surface
+density, capped at 100%. Sigma is in millimetres, defaults to zero (disabled), and is limited to 64 mm.
 The distance grid coarsens to limit memory on large objects. When its spacing
 approaches sigma, the sampled Gaussian and corner reinforcement become less
 accurate; a small sigma may no longer resolve useful detail.
 
 Density queries evaluate the selected upstream profile and gradient directly.
-With nonzero sigma, OpenCV filters a float copy of physical signed distances;
-queries subtract the interpolated smoothed distance from the raw distance to
-calculate reinforcement. Zero sigma allocates no smoothing buffer.
+With nonzero sigma, OpenCV filters physical signed distances at σ/√2, takes
+the absolute deviation, and filters that magnitude at σ/√2. Queries interpolate
+the resulting reinforcement. Both filters reuse one float buffer. Zero sigma allocates no smoothing buffer.
 Immutable geometry and density evaluators are shared across layer workers.
 Construction and OpenCV filtering report progress and support cancellation.
 
