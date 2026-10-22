@@ -45,7 +45,7 @@ struct DensityModifier {
     std::optional<AdaptiveInfillMode> mode;
 };
 
-enum class WallDistanceStage { Distance, Encoding, SmoothXY, SmoothZ, MaterialDensity, Modifiers, Relaxation, VoidRefinement, Complete };
+enum class WallDistanceStage { Distance, Encoding, SmoothDistance, SmoothReinforcement, MaterialDensity, Modifiers, Relaxation, VoidRefinement, Complete };
 // Called synchronously during construction, including within long phases.
 // The callback may throw to cancel construction; no partial table is cached.
 using WallDistanceProgress = std::function<void(WallDistanceStage, double)>;
@@ -61,8 +61,9 @@ public:
     double density(const Vec3d &point) const;
     double maximum_density() const;
     static constexpr double near_wall_distance = 2.;
-    // Relative material density; zero maximum_depth selects a uniform base.
-    static double density_ratio(double distance, double sampled_mean, double maximum_depth = 0., double interior_ratio = 0.01,
+    // Relative material density with a nonnegative corner adjustment.
+    // Zero maximum_depth selects a uniform base.
+    static double density_ratio(double distance, double correction, double maximum_depth = 0., double interior_ratio = 0.01,
                                 AdaptiveInfillGradient gradient = AdaptiveInfillGradient::Exponential);
     double grid_spacing() const;
     double maximum_density_ratio() const;
