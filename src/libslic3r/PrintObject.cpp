@@ -1390,8 +1390,8 @@ WallDistanceProgress PrintObject::infill_preparation_progress() const
             switch (stage) {
             case WallDistanceStage::Distance: message = L("Building infill wall distances"); break;
             case WallDistanceStage::Encoding: message = L("Encoding infill wall distances"); break;
-            case WallDistanceStage::SmoothXY: message = L("Smoothing infill wall distances (XY)"); break;
-            case WallDistanceStage::SmoothZ: message = L("Smoothing infill wall distances (Z)"); break;
+            case WallDistanceStage::SmoothDistance: message = L("Smoothing infill wall distances"); break;
+            case WallDistanceStage::SmoothReinforcement: message = L("Spreading infill corner reinforcement"); break;
             case WallDistanceStage::MaterialDensity: message = L("Preparing infill material density"); break;
             case WallDistanceStage::Modifiers: message = L("Blending infill material density modifiers"); break;
             case WallDistanceStage::Relaxation: message = L("Relaxing Voronoi control points"); break;
