@@ -32,11 +32,12 @@ void report(const WallDistanceProgress &progress, WallDistanceStage stage, doubl
 // OpenCV filters physical millimetres directly, without quantising distances.
 constexpr float maximum_distance = float(AdaptiveInfillDistanceField::far_distance);
 
-cv::Mat extrapolate_border(const cv::Mat &source, int radius_x, int radius_y, float maximum_step)
+cv::Mat filter_border(const cv::Mat &source, int radius_x, int radius_y, float maximum_step, bool extrapolate)
 {
     cv::Mat padded;
     cv::copyMakeBorder(source, padded, radius_y, radius_y, radius_x, radius_x,
                        cv::BORDER_REPLICATE | cv::BORDER_ISOLATED);
+    if (!extrapolate) return padded;
     // Linear outward extension preserves planar fields. Bound the slope by
     // the distance field's Lipschitz limit, and saturate at the table cutoff.
     for (int y = radius_y; radius_x > 0 && y < radius_y + source.rows; ++y) {
@@ -63,11 +64,11 @@ cv::Mat extrapolate_border(const cv::Mat &source, int radius_x, int radius_y, fl
     return padded;
 }
 
-void smooth_distances(std::vector<float> &values, const std::array<size_t, 3> &size, double spacing, double sigma,
-                      const WallDistanceProgress &progress)
+void gaussian_smooth(std::vector<float> &values, const std::array<size_t, 3> &size, double spacing, double sigma,
+                      const std::function<void(double)> &progress, bool extrapolate)
 {
     if (sigma == 0.) return;
-    report(progress, WallDistanceStage::SmoothXY, 0.);
+    progress(0.);
     const double radius_voxels = std::ceil(3. * sigma / spacing);
     if (radius_voxels > (std::numeric_limits<int>::max() - 1) / 2)
         throw std::invalid_argument("Infill smoothing radius is too large");
@@ -76,15 +77,14 @@ void smooth_distances(std::vector<float> &values, const std::array<size_t, 3> &s
     const float maximum_step = float(std::min(double(maximum_distance), spacing));
     const size_t plane_size = size[0] * size[1];
     // X and Y passes operate on one plane at a time. Only the filter's
-    // temporary border is extrapolated; no additional geometry is rasterized.
+    // temporary border is padded; no additional geometry is rasterized.
     for (size_t z = 0; z < size[2]; ++z) {
         cv::Mat plane(int(size[1]), int(size[0]), CV_32FC1, values.data() + z * plane_size);
-        cv::Mat padded = extrapolate_border(plane, radius, radius, maximum_step);
+        cv::Mat padded = filter_border(plane, radius, radius, maximum_step, extrapolate);
         cv::sepFilter2D(padded, padded, CV_32F, kernel, kernel);
         padded(cv::Rect(radius, radius, plane.cols, plane.rows)).copyTo(plane);
-        report(progress, WallDistanceStage::SmoothXY, double(z + 1) / size[2]);
+        progress(2. * double(z + 1) / (3. * size[2]));
     }
-    report(progress, WallDistanceStage::SmoothZ, 0.);
     // Treat XY positions as columns for the Z pass. Limit scratch storage by
     // filtering blocks of columns rather than padding an entire second volume.
     const size_t block_width = std::max(size_t(1), size_t(256 * 1024) / (size[2] + 2 * size_t(radius)));
@@ -92,14 +92,14 @@ void smooth_distances(std::vector<float> &values, const std::array<size_t, 3> &s
     for (size_t first = 0; first < plane_size; first += block_width) {
         cv::Mat columns(int(size[2]), int(std::min(block_width, plane_size - first)), CV_32FC1,
                         values.data() + first, plane_size * sizeof(float));
-        cv::Mat padded = extrapolate_border(columns, 0, radius, maximum_step);
+        cv::Mat padded = filter_border(columns, 0, radius, maximum_step, extrapolate);
         cv::sepFilter2D(padded, padded, CV_32F, identity, kernel);
         padded(cv::Rect(0, radius, columns.cols, columns.rows)).copyTo(columns);
-        report(progress, WallDistanceStage::SmoothZ, double(std::min(first + block_width, plane_size)) / plane_size);
+        progress((2. + double(std::min(first + block_width, plane_size)) / plane_size) / 3.);
     }
 }
 
-std::vector<float> smoothed_distances(const AdaptiveInfillDistanceField &original, double sigma,
+std::vector<float> corner_reinforcement(const AdaptiveInfillDistanceField &original, double sigma,
     const WallDistanceProgress &progress)
 {
     if (sigma == 0. || original.empty()) return {};
@@ -108,7 +108,15 @@ std::vector<float> smoothed_distances(const AdaptiveInfillDistanceField &origina
         if (i % 65536 == 0) report(progress, WallDistanceStage::Encoding, (1. + double(i) / values.size()) / 2.);
         values[i] = float(original.node_value(i));
     }
-    smooth_distances(values, original.grid_size(), original.grid_spacing(), sigma, progress);
+    // Detect curvature at a smaller scale, then spread its magnitude. Signed
+    // concave and convex contributions must not cancel in the final smoothing.
+    const double pass_sigma = sigma / std::sqrt(2.);
+    gaussian_smooth(values, original.grid_size(), original.grid_spacing(), pass_sigma,
+        [&](double fraction) { report(progress, WallDistanceStage::SmoothDistance, fraction); }, true);
+    for (size_t i = 0; i < values.size(); ++i)
+        values[i] = float(std::abs(double(values[i]) - original.node_value(i)));
+    gaussian_smooth(values, original.grid_size(), original.grid_spacing(), pass_sigma,
+        [&](double fraction) { report(progress, WallDistanceStage::SmoothReinforcement, fraction); }, false);
     return values;
 }
 
@@ -139,7 +147,7 @@ struct InfillDensityField::Data {
     AdaptiveInfillMode mode;
     double interior_density;
     AdaptiveInfillGradient gradient;
-    std::vector<float> smoothed;
+    std::vector<float> reinforcement;
     explicit Data(std::vector<WallSlice> slices, double smoothing_sigma, const WallDistanceProgress &progress,
                    AdaptiveInfillMode mode, double material_density, double interior_density, AdaptiveInfillGradient gradient, AdaptiveInfillFields geometry)
         : geometry(std::move(geometry)), reference_density(material_density), mode(mode),
@@ -161,28 +169,28 @@ struct InfillDensityField::Data {
             this->geometry = density_geometry(cache, [&] { return slices; }, mode, progress);
         }
         original = this->geometry[size_t(selected)]->distances();
-        smoothed = smoothed_distances(original, smoothing_sigma, progress);
+        reinforcement = corner_reinforcement(original, smoothing_sigma, progress);
         report(progress, WallDistanceStage::Complete, 1.);
     }
 
-    double local_ratio(const Vec3d &point, double raw, double mean, AdaptiveInfillMode mode,
+    double local_ratio(const Vec3d &point, double raw, double correction, AdaptiveInfillMode mode,
         bool graded, double interior_ratio, AdaptiveInfillGradient gradient) const
     {
-        if (!graded) return InfillDensityField::density_ratio(raw, mean);
+        if (!graded) return InfillDensityField::density_ratio(raw, correction);
         const auto &shape = geometry[size_t(mode)];
-        if (!shape || shape->empty()) return InfillDensityField::density_ratio(raw, mean);
+        if (!shape || shape->empty()) return InfillDensityField::density_ratio(raw, correction);
         const bool planar = mode == AdaptiveInfillMode::NormalX || mode == AdaptiveInfillMode::NormalY || mode == AdaptiveInfillMode::NormalZ;
         if ((planar ? shape->distances().signed_distance(point) : raw) >= 0.)
-            return InfillDensityField::density_ratio(raw, mean);
+            return InfillDensityField::density_ratio(raw, correction);
         const auto at_depth = [&](double depth) {
-            if (mean == raw) return adaptive_density_scale(interior_ratio, gradient, depth);
-            return InfillDensityField::density_ratio(raw, mean, depth > 0. ? -raw / depth : 0., interior_ratio, gradient);
+            if (correction == 0.) return adaptive_density_scale(interior_ratio, gradient, depth);
+            return InfillDensityField::density_ratio(raw, correction, depth > 0. ? -raw / depth : 0., interior_ratio, gradient);
         };
         if (mode == AdaptiveInfillMode::DistanceWarp || mode == AdaptiveInfillMode::SmoothBlend || mode == AdaptiveInfillMode::SteppedShells)
             return at_depth(shape->depth(point));
         AdaptiveInfillField::Radials radials;
         const size_t count = shape->radial(point, radials);
-        if (count == 0) return InfillDensityField::density_ratio(raw, mean);
+        if (count == 0) return InfillDensityField::density_ratio(raw, correction);
         double ratio = 0.;
         for (size_t j = 0; j < count; ++j) ratio += radials[j].weight * at_depth(1. - radials[j].t);
         return ratio;
@@ -193,14 +201,19 @@ struct InfillDensityField::Data {
         if (original.empty()) return reference_density;
         const auto where = original.interpolation(point);
         const double raw = original.sample(where);
-        double mean = raw;
-        if (!smoothed.empty()) {
-            mean = 0.;
-            for (size_t j = 0; j < 8; ++j) mean += smoothed[where.indices[j]] * where.weights[j];
-            if (where.outside > 0.) mean = std::min(AdaptiveInfillDistanceField::far_distance,
-                std::hypot(std::max(0., mean), where.outside));
+        double correction = 0.;
+        if (!reinforcement.empty())
+            for (size_t j = 0; j < 8; ++j) correction += reinforcement[where.indices[j]] * where.weights[j];
+        if (where.outside > 0. && correction > 0.) {
+            // Extend the adjusted distance like the raw SDF, letting its
+            // difference fade instead of repeating edge reinforcement forever.
+            auto edge = where;
+            edge.outside = 0.;
+            const double boundary = std::max(0., original.sample(edge));
+            correction = std::max(0., std::min(AdaptiveInfillDistanceField::far_distance,
+                std::hypot(boundary + correction, where.outside)) - raw);
         }
-        return std::min(1., reference_density * local_ratio(point, raw, mean, mode,
+        return std::min(1., reference_density * local_ratio(point, raw, correction, mode,
             mode != AdaptiveInfillMode::Disabled && interior_density != reference_density, interior_density / reference_density, gradient));
     }
 };
@@ -226,9 +239,8 @@ std::vector<double> InfillDensityField::sample(const std::vector<Vec3d> &points)
     return m_data->original.sample(points);
 }
 
-double InfillDensityField::density_ratio(double distance, double sampled_mean, double maximum_depth, double interior_ratio, AdaptiveInfillGradient gradient)
+double InfillDensityField::density_ratio(double distance, double correction, double maximum_depth, double interior_ratio, AdaptiveInfillGradient gradient)
 {
-    const double correction = std::abs(sampled_mean - distance);
     const double raw_depth = std::max(0., -distance);
     const double depth = std::max(0., raw_depth + (interior_ratio > 1. ? correction : -correction));
     const double t = maximum_depth > 0. ? std::clamp(depth / maximum_depth, 0., 1.) : 0.;
