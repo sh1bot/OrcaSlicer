@@ -58,7 +58,14 @@ private:
 // One registry per ascending worker batch. Successive fillers reuse engines
 // sequentially; concurrent workers own independent registries and networks.
 struct VoronoiEngineRegistry {
-    std::map<std::shared_ptr<const Voronoi::PointCloudProvider>, std::shared_ptr<VoronoiInfill>> by_provider;
+    std::shared_ptr<VoronoiInfill> get(std::shared_ptr<const Voronoi::PointCloudProvider> provider, double spacing)
+    {
+        auto &engine = m_engines[{provider, spacing}];
+        if (!engine) engine = provider ? std::make_shared<VoronoiInfill>(std::move(provider)) : std::make_shared<VoronoiInfill>();
+        return engine;
+    }
+private:
+    std::map<std::pair<std::shared_ptr<const Voronoi::PointCloudProvider>, double>, std::shared_ptr<VoronoiInfill>> m_engines;
 };
 
 } // namespace Slic3r

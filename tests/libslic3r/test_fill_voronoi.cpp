@@ -2034,3 +2034,58 @@ TEST_CASE("Active cloud uses the provider's generation cell size", "[FillVoronoi
     REQUIRE_THAT(cloud.known_bounds().max.z(), Catch::Matchers::WithinAbs(21., EPSILON));
     for (const auto &point : cloud.sites()) REQUIRE(point.z() >= cutoffs.back());
 }
+
+TEST_CASE("Voronoi engines retain independent networks for alternating spacings and providers", "[FillVoronoi][Incremental]")
+{
+    class CountingCloud : public Voronoi::PoissonPointCloud {
+    public:
+        mutable size_t queries = 0;
+        std::vector<Vec3d> points_in_cells(const Vec3i64 &first, const Vec3i64 &last, double spacing) const override
+            { ++queries; return PoissonPointCloud::points_in_cells(first, last, spacing); }
+    };
+    auto provider = std::make_shared<CountingCloud>();
+    VoronoiEngineRegistry engines;
+    const auto region = rectangle(-10., -10., 10., 10.);
+    const auto bounds = region.contour.bounding_box();
+    const std::array<double, 2> spacings {3., 5.};
+    std::array<Polylines, 2> expected;
+    for (double z : {1.1, 1.2}) {
+        for (size_t i = 0; i < spacings.size(); ++i) {
+            const double spacing = spacings[i];
+            expected[i] = engines.get(provider, spacing)->fill_geometry(bounds, region, {.4, .2, z, .45, .2, .2, .4, 1, spacing}).walls;
+            REQUIRE_FALSE(expected[i].empty());
+        }
+        const size_t queries = provider->queries;
+        for (size_t i = 0; i < spacings.size(); ++i)
+            REQUIRE(engines.get(provider, spacings[i])->fill_geometry(bounds, region, {.4, .2, z, .45, .2, .2, .4, 1, spacings[i]}).walls == expected[i]);
+        REQUIRE(provider->queries == queries);
+    }
+    REQUIRE(engines.get(provider, 3.) != engines.get(provider, 5.));
+    REQUIRE(engines.get(provider, 3.) != engines.get(std::make_shared<CountingCloud>(), 3.));
+    REQUIRE(engines.get({}, 3.) == engines.get({}, 3.));
+    REQUIRE(engines.get({}, 3.) != engines.get({}, 5.));
+}
+
+TEST_CASE("Voronoi reports coverage failures instead of silently dropping infill", "[FillVoronoi]")
+{
+    const auto bounds = rectangle(-1., -1., 1., 1.).contour.bounding_box();
+    Voronoi::ActivePointCloud unbounded;
+    REQUIRE_THROWS_WITH(unbounded.update(bounds, 0., 0., 1., [](const auto &) { return 1e20; }),
+                        "Voronoi point coverage exceeds coordinate limits");
+    auto provider = std::make_shared<FixedProvider>();
+    provider->sites.emplace_back(0., 0., 0.);
+    Voronoi::ActivePointCloud finite(provider);
+    REQUIRE_THROWS_WITH(finite.update(bounds, 0., 0., 1., [](const auto &) {
+        return std::numeric_limits<double>::infinity();
+    }), "Voronoi point coverage could not be established");
+
+    class EmptyFiniteProvider : public FixedProvider {
+    public:
+        std::optional<BoundingBoxf3> extent() const override
+            { return BoundingBoxf3(Vec3d(-1., -1., -1.), Vec3d(1., 1., 1.)); }
+    };
+    Voronoi::ActivePointCloud empty(std::make_shared<EmptyFiniteProvider>());
+    REQUIRE_FALSE(empty.update(bounds, 0., 0., 1., [](const auto &) {
+        return std::numeric_limits<double>::infinity();
+    }));
+}
