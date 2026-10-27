@@ -28,15 +28,7 @@ public:
         { if (this != &other) *this = FillVoronoi(other); return *this; }
     FillVoronoi &operator=(FillVoronoi &&) = default;
     void set_point_cloud(std::shared_ptr<const Voronoi::PointCloudProvider> provider, VoronoiEngineRegistry *engines = nullptr)
-    {
-        if (engines) {
-            auto &engine = engines->by_provider[provider];
-            if (!engine) engine = std::make_shared<VoronoiInfill>(provider);
-            m_infill = engine;
-        } else {
-            m_infill = std::make_shared<VoronoiInfill>(std::move(provider));
-        }
-    }
+        { m_infill = engines ? engines->get(provider, point_spacing) : std::make_shared<VoronoiInfill>(std::move(provider)); }
     void set_shell_boundaries(ExPolygons boundaries) { m_shell_boundaries = std::move(boundaries); }
     // Non-owning; the lower-layer footprints must outlive this filler and its clones.
     void set_floor_support(const ExPolygons *support) { m_floor_support = support; }
