@@ -1,0 +1,13 @@
+Official OrcaSlicer 2.5.0-dev d81a212f53d15ad841c88df9e71325e37f0efe14
+Linux x86_64 GUI, SIGSEGV
+
+#0  0x00005555581f390f in Slic3r::groupingVolumesForBrim(Slic3r::PrintObject*, std::vector<Slic3r::Layer*, std::allocator<Slic3r::Layer*> >&, int) ()
+#1  0x00005555581f3c14 in Slic3r::PrintObject::slice() ()
+#2  0x0000555557d77a4c in Slic3r::Print::process(long long*, bool) ()
+#3  0x000055555894821d in Slic3r::BackgroundSlicingProcess::process_fff() ()
+#4  0x000055555894e330 in Slic3r::BackgroundSlicingProcess::call_process(std::__exception_ptr::exception_ptr&) ()
+#5  0x000055555894d259 in Slic3r::BackgroundSlicingProcess::thread_proc() ()
+#6  0x000055555895054d in boost::detail::thread_data<Slic3r::BackgroundSlicingProcess::start()::$_1>::run() ()
+#7  0x000055555c8ff3d4 in boost::(anonymous namespace)::thread_proxy(void*) ()
+#8  0x00007fffec7638bb in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#9  0x00007fffec7e1538 in ?? () from /lib/x86_64-linux-gnu/libc.so.6

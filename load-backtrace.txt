@@ -1,0 +1,27 @@
+Official OrcaSlicer 2.5.0-dev d81a212f53d15ad841c88df9e71325e37f0efe14
+Linux x86_64 GUI, SIGSEGV
+
+#0  0x00005555591104a7 in Slic3r::GUI::Plater::priv::load_files(std::vector<boost::filesystem::path, std::allocator<boost::filesystem::path> > const&, Slic3r::LoadStrategy, bool, bool*, bool*) ()
+#1  0x0000555559145e7f in Slic3r::GUI::Plater::load_project(wxString const&, wxString const&) ()
+#2  0x00005555591853db in Slic3r::GUI::Plater::open_3mf_file(boost::filesystem::path const&) ()
+#3  0x00005555590e7b56 in Slic3r::GUI::Plater::load_files(wxArrayString const&) ()
+#4  0x00005555589eaaf2 in Slic3r::GUI::GUI_App::post_init() ()
+#5  0x0000555558a5b7a8 in wxEventFunctorFunctor<wxEventTypeTag<wxIdleEvent>, Slic3r::GUI::GUI_App::on_init_inner()::$_7>::operator()(wxEvtHandler*, wxEvent&) ()
+#6  0x000055555d2a281c in wxEvtHandler::SearchDynamicEventTable(wxEvent&) ()
+#7  0x000055555d2a2570 in wxEvtHandler::ProcessEventLocally(wxEvent&) ()
+#8  0x000055555d2a2434 in wxEvtHandler::ProcessEvent(wxEvent&) ()
+#9  0x000055555d2a2321 in wxEvtHandler::SafelyProcessEvent(wxEvent&) ()
+#10 0x000055555d1ee279 in wxAppConsoleBase::ProcessIdle() ()
+#11 0x000055555cfc9943 in wxAppBase::ProcessIdle() ()
+#12 0x000055555d13b55a in wxApp::DoIdle() ()
+#13 0x000055555d13ca90 in wxapp_idle_callback(void*) ()
+#14 0x00007fffec921485 in ?? () from /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#15 0x00007fffec9236b7 in ?? () from /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#16 0x00007fffec92411f in g_main_loop_run () from /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#17 0x00007fffef6cc05d in gtk_main () from /lib/x86_64-linux-gnu/libgtk-3.so.0
+#18 0x000055555d14ae55 in wxGUIEventLoop::DoRun() ()
+#19 0x000055555d2156e8 in wxEventLoopBase::Run() ()
+#20 0x000055555d1ee0aa in wxAppConsoleBase::MainLoop() ()
+#21 0x000055555d244bf8 in wxEntry(int&, wchar_t**) ()
+#22 0x0000555558c3acfa in Slic3r::GUI::GUI_Run(Slic3r::GUI::GUI_InitParams&) ()
+#23 0x00005555574e01b5 in Slic3r::CLI::run(int, char**) ()

@@ -1,0 +1,8 @@
+{
+  "commit": "d81a212f53d15ad841c88df9e71325e37f0efe14",
+  "platform": "Linux x86_64",
+  "build": "official nightly",
+  "slice-crash.3mf": "Loads in GUI; clicking Slice plate produces SIGSEGV in groupingVolumesForBrim",
+  "load-crash.3mf": "Opening as project produces SIGSEGV in Plater::priv::load_files",
+  "load-ok-control.3mf": "Loads successfully in GUI after adding filament_colour"
+}
