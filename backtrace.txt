@@ -1,0 +1,8 @@
+Official OrcaSlicer 2.5.0 beta, Linux x86_64 AppImage
+Synthetic empty-layer-crash.3mf; SIGSEGV
+
+#0  0x00005555581e80af in Slic3r::groupingVolumesForBrim(Slic3r::PrintObject*, std::vector<Slic3r::Layer*, std::allocator<Slic3r::Layer*> >&, int) ()
+#1  0x00005555581e83b4 in Slic3r::PrintObject::slice() ()
+#2  0x0000555557d6bfec in Slic3r::Print::process(long long*, bool) ()
+#3  0x0000555557514867 in Slic3r::CLI::run(int, char**) ()
+#4  0x00005555575674a1 in main ()

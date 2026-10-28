@@ -1,0 +1,32 @@
+[
+  {
+    "version": "2.4.2",
+    "case": "empty-layer-crash",
+    "returncode": -11
+  },
+  {
+    "version": "2.4.2",
+    "case": "normal-tetrahedron-control",
+    "returncode": 0
+  },
+  {
+    "version": "2.4.2",
+    "case": "no-raft-control",
+    "returncode": 156
+  },
+  {
+    "version": "2.5.0-beta",
+    "case": "empty-layer-crash",
+    "returncode": -11
+  },
+  {
+    "version": "2.5.0-beta",
+    "case": "normal-tetrahedron-control",
+    "returncode": 0
+  },
+  {
+    "version": "2.5.0-beta",
+    "case": "no-raft-control",
+    "returncode": 156
+  }
+]
