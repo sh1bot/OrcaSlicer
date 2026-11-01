@@ -19,7 +19,6 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
-#include <map>
 #include <stdexcept>
 #include <iterator>
 #include <memory>
@@ -142,13 +141,22 @@ Section section(const std::vector<Vec3d> &sites, const BoundingBox &bounds, doub
         auto key = [](const Kernel::Weighted_point_2 &p) {
             return std::array<double, 3>{CGAL::to_double(p.x()), CGAL::to_double(p.y()), CGAL::to_double(p.weight())};
         };
-        std::map<std::array<double, 3>, size_t> site_indices;
-        for (size_t i = 0; i < input.size(); ++i) {
-            auto inserted = site_indices.emplace(key(input[i]), i);
-            if (!inserted.second && inserted.first->second != size_t(-1) &&
-                sites[inserted.first->second] != sites[i])
-                inserted.first->second = size_t(-1); // Distinct XYZ sites with coincident power sites.
+        std::vector<std::pair<std::array<double, 3>, size_t>> site_indices;
+        site_indices.reserve(input.size());
+        for (size_t i = 0; i < input.size(); ++i)
+            site_indices.emplace_back(key(input[i]), i);
+        std::sort(site_indices.begin(), site_indices.end());
+        size_t unique = 0;
+        for (const auto &site : site_indices) {
+            if (unique != 0 && site_indices[unique - 1].first == site.first) {
+                size_t &index = site_indices[unique - 1].second;
+                if (index != size_t(-1) && sites[index] != sites[site.second])
+                    index = size_t(-1); // Distinct XYZ sites with coincident power sites.
+            } else {
+                site_indices[unique++] = site;
+            }
         }
+        site_indices.resize(unique);
         for (auto face = triangulation.finite_faces_begin(); face != triangulation.finite_faces_end(); ++face) {
             const Vec2d xy = point(triangulation.dual(face));
             if (!xy.allFinite() || xy.x() < min.x() || xy.x() > max.x() || xy.y() < min.y() || xy.y() > max.y())
@@ -157,8 +165,9 @@ Section section(const std::vector<Vec3d> &sites, const BoundingBox &bounds, doub
             const Vec2d scaled = (xy + center) / SCALING_FACTOR;
             std::array<size_t, 3> indices;
             for (size_t i = 0; i < 3; ++i) {
-                const auto site = site_indices.find(key(face->vertex(int(i))->point()));
-                if (site == site_indices.end())
+                const auto target = std::make_pair(key(face->vertex(int(i))->point()), size_t(0));
+                const auto site = std::lower_bound(site_indices.begin(), site_indices.end(), target);
+                if (site == site_indices.end() || site->first != target.first)
                     throw std::logic_error("Voronoi section refers to an unknown control point");
                 indices[i] = site->second;
             }
