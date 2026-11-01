@@ -108,7 +108,7 @@ WallDistancePointCloud::WallDistancePointCloud(WallDistanceSamples samples, doub
     : m_samples(std::move(samples)), m_maximum_ratio(maximum_ratio)
 {
     if (!m_samples || !std::isfinite(maximum_ratio) || maximum_ratio <= 0.)
-        throw std::invalid_argument("Invalid Voronoi material density field");
+        throw std::invalid_argument(_u8L("Invalid Voronoi material density field"));
 }
 
 std::vector<Vec3d> WallDistancePointCloud::points_in(const BoundingBoxf3 &box, double spacing) const
@@ -126,7 +126,7 @@ std::vector<Vec3d> WallDistancePointCloud::thin(std::vector<Vec3d> candidates) c
     if (candidates.empty()) return {};
     auto sites = candidates;
     const auto samples = m_samples(sites);
-    if (samples.size() != sites.size()) throw std::invalid_argument("Invalid Voronoi material density samples");
+    if (samples.size() != sites.size()) throw std::invalid_argument(_u8L("Invalid Voronoi material density samples"));
     std::vector<Vec3d> retained;
     for (size_t i = 0; i < sites.size(); ++i) {
         const double ratio = samples[i].density / m_maximum_ratio;
