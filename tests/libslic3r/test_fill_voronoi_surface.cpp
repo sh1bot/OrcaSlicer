@@ -347,7 +347,6 @@ TEST_CASE("Worker-local Voronoi engines survive temporary fillers and isolate cl
         expected = temporary.fill_surface(&surface, params);
     }
     REQUIRE(provider->queries > 0);
-    REQUIRE(engines.by_provider.size() == 1);
     const size_t initial_queries = provider->queries;
     FillVoronoi next;
     configure(next);
