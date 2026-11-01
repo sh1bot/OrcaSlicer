@@ -141,7 +141,7 @@ std::vector<Vec3d> WallDistancePointCloud::thin(std::vector<Vec3d> candidates) c
 std::vector<double> WallDistancePointCloud::local_spacing(const std::vector<Vec3d> &points, double nominal_spacing) const
 {
     const auto fields = m_samples(points);
-    if (fields.size() != points.size()) throw std::invalid_argument("Invalid Voronoi material density samples");
+    if (fields.size() != points.size()) throw std::invalid_argument(_u8L("Invalid Voronoi material density samples"));
     std::vector<double> result;
     result.reserve(fields.size());
     for (const auto &field : fields)
