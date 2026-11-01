@@ -43,7 +43,7 @@ PoissonPointCloud::PoissonPointCloud(double angle, const Vec2d &center)
     : m_cos(std::cos(angle)), m_sin(std::sin(angle)), m_center(center)
 {
     if (!std::isfinite(angle) || !center.allFinite())
-        throw std::invalid_argument("Invalid Voronoi cloud rotation");
+        throw std::invalid_argument(_u8L("Invalid Voronoi cloud rotation"));
 }
 
 Vec3d PoissonPointCloud::rotate(const Vec3d &point, bool inverse) const
