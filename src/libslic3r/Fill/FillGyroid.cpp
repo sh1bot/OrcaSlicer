@@ -1,3 +1,4 @@
+#include "../InfillDensityField.hpp"
 #include "../ClipperUtils.hpp"
 #include "../MarchingSquares.hpp"
 #include <cmath>
@@ -342,11 +343,15 @@ void FillGyroid::_fill_surface_single(
 
     // generate pattern
     Polylines polylines;
-    if (params.adaptive_infill_mode != AdaptiveInfillMode::Disabled && this->adaptive_infill_field != nullptr) {
+    if (params.adaptive_infill_mode != AdaptiveInfillMode::Disabled && this->adaptive_infill_field != nullptr &&
+        (!this->adaptive_infill_field->empty() || this->material_density_field)) {
         // Radians per mm of the regular pattern at a density.
         auto frequency = [&params, this](double density) { return density * DensityAdjust / (params.multiline * this->spacing); };
-        polylines = make_adaptive_tpms({gyroid, frequency(params.density), frequency(params.adaptive_infill_interior_density), params.adaptive_infill_gradient},
-                                       *this->adaptive_infill_field, bb, this->z, params.layer_height, this->spacing, infill_angle);
+        AdaptiveTpms tpms {gyroid, frequency(params.density), frequency(params.adaptive_infill_interior_density), params.adaptive_infill_gradient};
+        if (this->material_density_field)
+            tpms.frequency_at = [field = this->material_density_field, frequency](const Vec3d &point) { return frequency(field->density(point)); };
+        polylines = make_adaptive_tpms(tpms, *this->adaptive_infill_field, bb, this->z, params.layer_height, this->spacing, infill_angle);
+
     } else if (params.gyroid_optimized) {
         // Marching-squares path on the gyroid implicit field. Base period matches
         // the standard parametric path's wavelength: 2*pi * spacing / density_adj.

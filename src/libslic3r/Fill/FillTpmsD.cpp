@@ -1,3 +1,4 @@
+#include "../InfillDensityField.hpp"
 #include <cmath>
 #include <algorithm>
 #include <utility>
@@ -130,13 +131,17 @@ void FillTpmsD::_fill_surface_single(
         expolygon.rotate(-infill_angle);
 
     Polylines polylines;
-    if (params.adaptive_infill_mode != AdaptiveInfillMode::Disabled && this->adaptive_infill_field != nullptr) {
+    if (params.adaptive_infill_mode != AdaptiveInfillMode::Disabled && this->adaptive_infill_field != nullptr &&
+        (!this->adaptive_infill_field->empty() || this->material_density_field)) {
         // Radians per mm of the regular pattern at a density.
         auto frequency = [&params, this](double density) { return density * DensityAdjust / (params.multiline * this->spacing); };
         BoundingBox bbox = expolygon.contour.bounding_box();
         bbox.offset(scale_((params.multiline + 1) * this->spacing));
-        polylines = make_adaptive_tpms({schwarz_d, frequency(params.density), frequency(params.adaptive_infill_interior_density), params.adaptive_infill_gradient},
-                                       *this->adaptive_infill_field, bbox, this->z, params.layer_height, this->spacing, infill_angle);
+        AdaptiveTpms tpms {schwarz_d, frequency(params.density), frequency(params.adaptive_infill_interior_density), params.adaptive_infill_gradient};
+        if (this->material_density_field)
+            tpms.frequency_at = [field = this->material_density_field, frequency](const Vec3d &point) { return frequency(field->density(point)); };
+        polylines = make_adaptive_tpms(tpms, *this->adaptive_infill_field, bbox, this->z, params.layer_height, this->spacing, infill_angle);
+
     } else {
         BoundingBox bb = expolygon.contour.bounding_box();
         // Density adjusted to have a good %of weight.

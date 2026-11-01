@@ -186,10 +186,13 @@ set(lisbslic3r_sources
     Fill/FillRectilinear.hpp
     Fill/AdaptiveInfillField.cpp
     Fill/AdaptiveInfillField.hpp
+    Fill/AdaptiveInfillSliceSlabs.cpp
     Fill/FillTpmsD.cpp
     Fill/FillTpmsD.hpp
     Fill/FillTpmsFK.cpp
     Fill/FillTpmsFK.hpp
+    Fill/FillVoronoi.cpp
+    Fill/FillVoronoi.hpp
     Fill/Lightning/DistanceField.cpp
     Fill/Lightning/DistanceField.hpp
     Fill/Lightning/Generator.cpp
@@ -198,6 +201,21 @@ set(lisbslic3r_sources
     Fill/Lightning/Layer.hpp
     Fill/Lightning/TreeNode.cpp
     Fill/Lightning/TreeNode.hpp
+    Fill/VoronoiHash.hpp
+    Fill/VoronoiInfill.cpp
+    Fill/VoronoiInfill.hpp
+    Fill/VoronoiInfillCgal.hpp
+    Fill/VoronoiLattice.cpp
+    Fill/VoronoiLattice.hpp
+    Fill/VoronoiPointCloud.cpp
+    Fill/VoronoiPointCloud.hpp
+    Fill/VoronoiRelaxation.hpp
+    Fill/VoronoiRouting.cpp
+    Fill/VoronoiRouting.hpp
+    Fill/VoronoiVoid.hpp
+    Fill/VoronoiWallDistance.cpp
+    Fill/VoronoiWallDistance.hpp
+    Fill/VoronoiWallSnap.hpp
     FilamentMixer.cpp
     FilamentMixer.hpp
     FilamentMixerModel.hpp
@@ -342,6 +360,10 @@ set(lisbslic3r_sources
     IMEXHelpers.hpp
     IMEXZones.cpp
     IMEXZones.hpp
+    InfillDensityField.cpp
+    InfillDensityField.hpp
+    InfillDensityModifier.hpp
+    InfillMaterialDensity.hpp
     InstanceLock.cpp
     InstanceLock.hpp
     Int128.hpp
@@ -564,6 +586,7 @@ set(lisbslic3r_sources
     Utils.hpp
     VariableWidth.cpp
     VariableWidth.hpp
+    VoronoiCloudMethod.hpp
     Zipper.cpp
     Zipper.hpp
     FilamentGroup.hpp
@@ -632,6 +655,10 @@ cmake_policy(POP)
 
 add_library(libslic3r_cgal STATIC
     CutSurface.hpp CutSurface.cpp
+    Fill/VoronoiInfillCgal.cpp
+    Fill/VoronoiRelaxation.cpp
+    Fill/VoronoiVoid.cpp
+    Fill/VoronoiWallSnap.cpp
     IntersectionPoints.hpp IntersectionPoints.cpp
     MeshBoolean.hpp MeshBoolean.cpp
     MeshRepair.hpp MeshRepair.cpp

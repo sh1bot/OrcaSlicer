@@ -4,6 +4,7 @@
 #include "DeviceCore/DevConfigUtil.h"
 #include "format.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/InfillDensityModifier.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/MaterialType.hpp"
@@ -839,21 +840,33 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("infill_combination_max_layer_height", have_combined_infill, -1, _L("Enable infill combination and use nonzero sparse infill density to show this setting."));
 
     // Infill patterns that support multiline infill.
-    bool          have_multiline_infill_pattern = pattern == ipGyroid || pattern == ipGrid || pattern == ipRectilinear || pattern == ipTpmsD || pattern == ipTpmsFK || pattern == ipCrossHatch || pattern == ipHoneycomb || pattern == ipLateralLattice || pattern == ipLateralHoneycomb || pattern == ipConcentric ||
+    bool          have_multiline_infill_pattern = pattern == ipVoronoi || pattern == ipGyroid || pattern == ipGrid || pattern == ipRectilinear || pattern == ipTpmsD || pattern == ipTpmsFK || pattern == ipCrossHatch || pattern == ipHoneycomb || pattern == ipLateralLattice || pattern == ipLateralHoneycomb || pattern == ipConcentric ||
                                                   pattern == ipCubic || pattern == ipStars || pattern == ipAlignedRectilinear || pattern == ipLightning || pattern == ip3DHoneycomb || pattern == ipAdaptiveCubic || pattern == ipSupportCubic|| pattern == ipTriangles || pattern == ipQuarterCubic|| pattern == ipArchimedeanChords || pattern == ipHilbertCurve || pattern == ipOctagramSpiral;
 
     // The sparse infill density is the surface density of the adaptive infill; at 100% the infill is solid.
     bool have_adaptive_infill_pattern = have_infill && config->option<ConfigOptionPercent>("sparse_infill_density")->value < 100 &&
                             is_adaptive_infill_pattern(pattern);
-    toggle_line("adaptive_infill_mode", have_adaptive_infill_pattern, -1, _L("Select Gyroid, TPMS-D or TPMS-FK infill with sparse infill density greater than zero and less than 100%."));
-    bool have_adaptive_infill = have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
-    const wxString adaptive_density_reason = _L("Enable adaptive density for Gyroid, TPMS-D or TPMS-FK infill with sparse infill density greater than zero and less than 100%.");
-    toggle_line("adaptive_infill_interior_density", have_adaptive_infill, -1, adaptive_density_reason);
-    toggle_line("adaptive_infill_gradient", have_adaptive_infill, -1, adaptive_density_reason);
+    const bool voronoi_infill = have_infill && pattern == ipVoronoi;
+    const bool shared_density_infill = voronoi_infill || (!is_global_config && fused_density_modifier(*config));
+    toggle_line("adaptive_infill_mode", have_adaptive_infill_pattern || shared_density_infill, -1, _L("Select Voronoi, Gyroid, TPMS-D or TPMS-FK infill with nonzero sparse infill density."));
+    bool have_adaptive_infill_mode = have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
+    const bool shared_density_adaptive = shared_density_infill && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") != AdaptiveInfillMode::Disabled;
+    const wxString adaptive_density_reason = _L("Enable adaptive density for Voronoi, Gyroid, TPMS-D or TPMS-FK infill.");
+    toggle_line("adaptive_infill_interior_density", have_adaptive_infill_mode || shared_density_adaptive, -1, adaptive_density_reason);
+    toggle_line("adaptive_infill_gradient", have_adaptive_infill_mode || shared_density_adaptive, -1, adaptive_density_reason);
 
     // gyroid_optimized only applies when the sparse infill pattern is gyroid without adaptive density;
     // hide the whole line otherwise.
-    toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid && !have_adaptive_infill, -1, _L("Select Gyroid infill with nonzero sparse infill density and disable adaptive density to use this setting."));
+    toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid && !have_adaptive_infill_mode, -1, _L("Select Gyroid infill with nonzero sparse infill density and disable adaptive density to use this setting."));
+    toggle_line("voronoi_cloud_method", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_relaxation_iterations", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_snap_to_wall", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_hull_threshold", have_infill && pattern == ipVoronoi);
+    toggle_line("voronoi_trace_shell", have_infill && pattern == ipVoronoi);
+    toggle_line("infill_slice_slab_distances", have_infill && (shared_density_infill || have_adaptive_infill_mode));
+    toggle_line("infill_smoothing_sigma", have_infill && (shared_density_infill ||
+        (have_adaptive_infill_pattern && config->opt_enum<AdaptiveInfillMode>("adaptive_infill_mode") == AdaptiveInfillMode::SmoothBlend)));
+
 
     // If there is infill, enable/disable fill_multiline according to whether the pattern supports multiline infill.
     if (have_infill) {
@@ -1358,8 +1371,12 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
 
     //Orca: disable infill_direction/solid_infill_direction if sparse_infill_rotate_template/solid_infill_rotate_template is not empty value and adaptive cubic/support cubic infill pattern is not selected
     toggle_field("sparse_infill_rotate_template", !FillAdaptive, -1, _L("Infill rotation templates are unavailable for Adaptive Cubic and Support Cubic infill."));
-    toggle_field("infill_direction", config->opt_string("sparse_infill_rotate_template") == "" && !FillAdaptive, -1, _L("Clear the sparse infill rotation template and choose a pattern other than Adaptive Cubic or Support Cubic to edit infill direction."));
+    toggle_field("infill_direction", (pattern == ipVoronoi || config->opt_string("sparse_infill_rotate_template") == "") && !FillAdaptive, -1, _L("Clear the sparse infill rotation template and choose a pattern other than Adaptive Cubic or Support Cubic to edit infill direction."));
     toggle_field("solid_infill_direction", config->opt_string("solid_infill_rotate_template") == "", -1, _L("Clear the solid infill rotation template to edit solid infill direction."));
+
+    if (pattern == ipVoronoi)
+        toggle_line("sparse_infill_rotate_template", false, -1, _L("Voronoi infill keeps one cloud orientation throughout the object. Per-layer rotation templates do not apply."));
+    toggle_line("align_infill_direction_to_model", true);
     
     toggle_line("infill_overhang_angle", config->opt_enum<InfillPattern>("sparse_infill_pattern") == InfillPattern::ipLateralHoneycomb, -1, _L("Select the Lateral Honeycomb sparse infill pattern to use this setting."));
 
