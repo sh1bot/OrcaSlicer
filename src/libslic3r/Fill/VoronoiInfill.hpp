@@ -58,8 +58,7 @@ private:
     std::vector<Voronoi::Band> m_bands;
 };
 
-// Successive fillers in an ascending worker batch reuse the same engine.
-// Clients are sequential; concurrent workers own independent engines.
+// Each worker keeps its own engines while processing ascending layer batches.
 struct VoronoiEngineRegistry {
     std::shared_ptr<VoronoiInfill> get(std::shared_ptr<const Voronoi::PointCloudProvider> provider, double spacing)
     {
