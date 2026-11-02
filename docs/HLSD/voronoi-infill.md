@@ -75,6 +75,18 @@ depth or lobe/section profiles when Adaptive density is enabled, and independent
 corners when smoothing is enabled. The defaults (Disabled and zero smoothing)
 give a uniform cloud without preparing a distance field.
 
+## Structured points
+
+FCC and Cubic lattices have their [111] body diagonal vertical.
+Ordered dithering selects sites according to the cube
+of local density. FCC uses tetrahedral parity groups and coarser checkerboards;
+Cubic uses a three-dimensional Bayer order. Density calibration is approximate.
+
+Complete FCC lattices have vertical faces and faces inclined about 35 degrees
+above horizontal, below the usual 45-degree guideline. Complete Cubic faces
+incline about 55 degrees, making Cubic preferable for steeper walls. Thinning can
+introduce shallower faces. Neither distribution guarantees self-supporting infill.
+
 Adaptive point selection reuses the object’s prepared spatial profile. A provider owns its density evaluator; direct profile evaluation has no separate result cache. Gaussian smoothing retains its prepared buffer.
 
 The object and density evaluators share the same prepared adaptive profile arrays. The object borrows its selected array; clearing the density fields also clears those entries.

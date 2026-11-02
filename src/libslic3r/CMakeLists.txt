@@ -204,6 +204,8 @@ set(lisbslic3r_sources
     Fill/VoronoiInfill.cpp
     Fill/VoronoiInfill.hpp
     Fill/VoronoiInfillCgal.hpp
+    Fill/VoronoiLattice.cpp
+    Fill/VoronoiLattice.hpp
     Fill/VoronoiPointCloud.cpp
     Fill/VoronoiPointCloud.hpp
     Fill/VoronoiRouting.cpp
@@ -578,6 +580,7 @@ set(lisbslic3r_sources
     Utils.hpp
     VariableWidth.cpp
     VariableWidth.hpp
+    VoronoiCloudMethod.hpp
     Zipper.cpp
     Zipper.hpp
     FilamentGroup.hpp

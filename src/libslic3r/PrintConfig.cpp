@@ -1,5 +1,6 @@
 #include "PrintConfig.hpp"
 #include "InfillDensityField.hpp"
+#include "VoronoiCloudMethod.hpp"
 #include "CommonDefs.hpp"
 #include "Point.hpp"
 #include "Polygon.hpp"
@@ -260,6 +261,13 @@ static t_config_enum_values s_keys_map_ArcFittingMode {
     { "sparse_infill", int(ArcFittingMode::SparseInfill) }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ArcFittingMode)
+
+static t_config_enum_values s_keys_map_VoronoiCloudMethod {
+    {"random", int(VoronoiCloudMethod::Random)},
+    {"fcc", int(VoronoiCloudMethod::Fcc)},
+    {"cubic", int(VoronoiCloudMethod::Cubic)}
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(VoronoiCloudMethod)
 
 static t_config_enum_values s_keys_map_CenterOfSurfacePattern{
     {"each_surface", int(CenterOfSurfacePattern::Each_Surface)},
@@ -3808,6 +3816,16 @@ void PrintConfigDef::init_fff_params()
                         "buckling resistance. Filament use is preserved. No effect at ~30% sparse infill "
                         "density and above. Only applies when Sparse infill pattern is set to Gyroid.");
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("voronoi_cloud_method", coEnum);
+    def->label = L("Voronoi point cloud");
+    def->category = L("Strength");
+    def->tooltip = L("Random places independent points according to local density. FCC and Cubic use lattices with a vertical body diagonal, thinning points with a three-dimensional ordered dither to follow local density. Cubic is preferable for steeper walls: its complete lattice gives faces about 55 degrees above horizontal, versus about 35 degrees for FCC, below the usual 45-degree guideline. Thinning can produce shallower faces; no method guarantees self-supporting infill. High Voronoi material density can require substantial memory; consider Fill Multiline for thicker walls with fewer cells.");
+    def->enum_keys_map = &ConfigOptionEnum<VoronoiCloudMethod>::get_enum_values();
+    def->enum_values = {"random", "fcc", "cubic"};
+    def->enum_labels = {L("Random"), L("FCC"), L("Cubic")};
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<VoronoiCloudMethod>(VoronoiCloudMethod::Random));
 
     def = this->add("infill_smoothing_sigma", coFloat);
     def->label = L("Corner smoothing sigma");
@@ -9761,7 +9779,6 @@ void PrintConfigDef::init_sla_params()
 
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
 {
-
     if (opt_key == "voronoi_smoothing_sigma") opt_key = "infill_smoothing_sigma";
     //BBS: handle legacy options
     if (opt_key == "curr_bed_type" && value == "SuperTack Plate") {

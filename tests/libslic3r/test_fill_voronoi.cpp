@@ -3,6 +3,7 @@
 #include <math.h>
 #include <tbb/parallel_for.h>
 
+#include <Eigen/Core>
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/InfillDensityField.hpp"
 #include "libslic3r/Point.hpp"
@@ -16,10 +17,12 @@
 #include "catch2/matchers/catch_matchers_floating_point.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Fill/VoronoiInfillCgal.hpp"
+#include "libslic3r/VoronoiCloudMethod.hpp"
 #include "libslic3r/Fill/VoronoiInfill.hpp"
 #include "libslic3r/Fill/VoronoiRouting.hpp"
 #include "libslic3r/Fill/VoronoiWallDistance.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
+#include "libslic3r/Fill/VoronoiLattice.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/EdgeGrid.hpp"
 #include <atomic>
@@ -1069,9 +1072,127 @@ TEST_CASE("Canceled Voronoi smoothing leaves the cache usable", "[FillVoronoi]")
 
 
 
+TEST_CASE("FCC has twelve nearest neighbours and a vertical body diagonal", "[FillVoronoi][Fcc]")
+{
+    const Voronoi::LatticePointCloud cloud(VoronoiCloudMethod::Fcc, {}, 1.);
+    const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-8.), Vec3d::Constant(8.)), 3.);
+    std::vector<Vec3d> neighbours;
+    for (const auto &p : sites)
+        if (p.norm() > 1e-9) neighbours.push_back(p);
+    std::sort(neighbours.begin(), neighbours.end(), [](const auto &a, const auto &b) { return a.norm() < b.norm(); });
+    REQUIRE(neighbours.size() > 12);
+    const double edge = std::pow(2., 1. / 6.) * 3.;
+    int vertical_faces = 0;
+    for (size_t i = 0; i < 12; ++i) {
+        REQUIRE_THAT(neighbours[i].norm(), Catch::Matchers::WithinAbs(edge, 1e-9));
+        const double cosine = std::abs(neighbours[i].z()) / edge;
+        if (cosine < 1e-9) ++vertical_faces;
+        else REQUIRE_THAT(cosine, Catch::Matchers::WithinAbs(std::sqrt(2. / 3.), 1e-9));
+    }
+    REQUIRE(vertical_faces == 6);
+    REQUIRE(neighbours[12].norm() > edge * 1.1);
+}
 
+TEST_CASE("Cubic sites have six orthogonal neighbours and a vertical body diagonal", "[FillVoronoi][Lattice]")
+{
+    const Voronoi::LatticePointCloud cloud(VoronoiCloudMethod::Cubic, {}, 1.);
+    const auto sites = cloud.points_in(BoundingBoxf3(Vec3d::Constant(-8.), Vec3d::Constant(8.)), 3.);
+    std::vector<Vec3d> neighbours;
+    for (const auto &p : sites)
+        if (p.norm() > 1e-9) neighbours.push_back(p);
+    std::sort(neighbours.begin(), neighbours.end(), [](const auto &a, const auto &b) { return a.norm() < b.norm(); });
+    REQUIRE(neighbours.size() > 6);
+    for (size_t i = 0; i < 6; ++i) {
+        REQUIRE_THAT(neighbours[i].norm(), Catch::Matchers::WithinAbs(3., 1e-9));
+        REQUIRE_THAT(std::abs(neighbours[i].z()) / 3., Catch::Matchers::WithinAbs(1. / std::sqrt(3.), 1e-9));
+        for (size_t j = i + 1; j < 6; ++j) {
+            const double cosine = neighbours[i].dot(neighbours[j]) / 9.;
+            REQUIRE_THAT(cosine, Catch::Matchers::WithinAbs(cosine < -0.5 ? -1. : 0., 1e-9));
+        }
+    }
+    REQUIRE_THAT(neighbours[6].norm(), Catch::Matchers::WithinAbs(3. * std::sqrt(2.), 1e-9));
+}
 
+TEST_CASE("FCC thinning follows cubic tetrahedra and coarser checkerboards", "[FillVoronoi][Fcc]")
+{
+    const double retention = GENERATE(0.75, 0.5, 0.25, 0.125, 0.015625);
+    const double maximum_depth = 6., spacing = 3.;
+    const double near = InfillDensityField::near_wall_distance;
+    const double maximum = InfillDensityField::density_ratio(0., near, 0.);
+    const double target = maximum * std::cbrt(retention);
+    // Find a constant distance sample giving this retention through the public
+    // density function, independently of its particular maximum_depth curve.
+    double low = 0., high = 64.;
+    for (int step = 0; step < 48; ++step) {
+        const double depth = 0.5 * (low + high);
+        if (InfillDensityField::density_ratio(-std::max(near, depth), std::max(near, depth) - depth, maximum_depth) > target)
+            low = depth;
+        else high = depth;
+    }
+    const double depth = 0.5 * (low + high);
+    const auto samples = [=](const auto &points) {
+        return std::vector<InfillDensitySample>(points.size(), {-std::max(near, depth), InfillDensityField::density_ratio(-std::max(near, depth), std::max(near, depth) - depth, maximum_depth)});
+    };
+    const auto saturated = [=](const auto &points) {
+        return std::vector<InfillDensitySample>(points.size(), {0., InfillDensityField::density_ratio(0., near, maximum_depth)});
+    };
+    const BoundingBoxf3 box(Vec3d::Constant(-12.), Vec3d::Constant(12.));
+    const auto selected = Voronoi::LatticePointCloud(VoronoiCloudMethod::Fcc, samples, maximum).points_in(box, spacing);
+    const auto candidates = Voronoi::LatticePointCloud(VoronoiCloudMethod::Fcc, saturated, maximum).points_in(box, spacing);
+    Eigen::Matrix3d orientation;
+    orientation.row(0) = Vec3d(1., -1., 0.).normalized();
+    orientation.row(1) = Vec3d(1., 1., -2.).normalized();
+    orientation.row(2) = Vec3d(1., 1., 1.).normalized();
+    const double half_cube = std::pow(2., 1. / 6.) * spacing / maximum / std::sqrt(2.);
+    const auto coordinates = [&](const Vec3d &p) {
+        const Vec3d untilted = orientation.transpose() * p;
+        return std::array<int64_t, 3>{std::llround(untilted.x() / half_cube), std::llround(untilted.y() / half_cube),
+                                      std::llround(untilted.z() / half_cube)};
+    };
+    std::set<std::array<int64_t, 3>> actual, expected;
+    for (const auto &p : selected) REQUIRE(actual.insert(coordinates(p)).second);
+    for (const auto &p : candidates) {
+        const auto q = coordinates(p);
+        const bool u = q[0] % 2 != 0, v = q[1] % 2 != 0, w = q[2] % 2 != 0;
+        const int64_t scale = retention == 0.015625 ? 4 : 2;
+        const bool keep = retention == 0.75 ? !(u && v) : retention == 0.5 ? !u :
+                          retention == 0.25 ? !u && !v && !w :
+                          q[0] % scale == 0 && q[1] % scale == 0 && q[2] % scale == 0 &&
+                          (q[0] + q[1] + q[2]) / scale % 2 == 0;
+        if (keep) expected.insert(q);
+    }
+    REQUIRE_FALSE(expected.empty());
+    REQUIRE(actual == expected);
+}
 
+TEST_CASE("Lattice thinning follows density and preserves partitioned queries", "[FillVoronoi][Lattice]")
+{
+    const auto method = GENERATE(VoronoiCloudMethod::Fcc, VoronoiCloudMethod::Cubic);
+    const bool adaptive = GENERATE(false, true);
+    const double maximum = InfillDensityField::density_ratio(0., 2., 0.);
+    const auto sample = [adaptive](const std::vector<Vec3d> &points) {
+        return std::vector<InfillDensitySample>(points.size(), {-6., InfillDensityField::density_ratio(-6., 0., adaptive ? 32. : 0.)});
+    };
+    const Voronoi::LatticePointCloud cloud(method, sample, maximum);
+    const BoundingBoxf3 box(Vec3d(-50.3, -49.7, -48.8), Vec3d(51.2, 50.4, 49.9));
+    const auto whole = cloud.points_in(box, 3.);
+    REQUIRE_FALSE(whole.empty());
+    auto keys = [](const auto &points) {
+        std::set<std::array<double, 3>> result;
+        for (const auto &p : points) REQUIRE(result.insert({p.x(), p.y(), p.z()}).second);
+        return result;
+    };
+    const int axis = GENERATE(0, 1, 2);
+    BoundingBoxf3 first = box, second = box;
+    first.max[axis] = second.min[axis] = 0.37;
+    auto parts = cloud.points_in(first, 3.);
+    append(parts, cloud.points_in(second, 3.));
+    REQUIRE(keys(parts) == keys(whole));
+    const auto candidates = Voronoi::LatticePointCloud(method, {}, 1.).points_in(box, 3. / maximum);
+    const double probability = std::pow(InfillDensityField::density_ratio(-6., 0., adaptive ? 32. : 0.) / maximum, 3.);
+    REQUIRE_THAT(double(whole.size()) / candidates.size(), Catch::Matchers::WithinRel(probability, 0.08));
+    REQUIRE(cloud.points_in(box, 3.) == whole);
+}
 
 TEST_CASE("The candidate density bound covers both sparse interiors and dense walls", "[FillVoronoi][MaterialDensity]")
 {
@@ -1090,8 +1211,6 @@ TEST_CASE("The candidate density bound covers both sparse interiors and dense wa
     for (const auto &sample : samples)
         REQUIRE(field.maximum_density_ratio() >= sample.density - 1e-12);
 }
-
-
 
 
 
@@ -1556,5 +1675,22 @@ TEST_CASE("Voronoi distinguishes duplicate sites from ambiguous power sites", "[
         if (!mirrored)
             for (const Vec3d &site : section.junctions.front().sites)
                 REQUIRE(site.z() >= 0.);
+    }
+}
+
+TEST_CASE("Point cloud settings select independent distribution providers", "[FillVoronoi][Lattice]")
+{
+    Voronoi::WallDistanceCloudCache cache;
+    const auto slices = []() -> std::vector<WallSlice> { throw std::runtime_error("Uniform clouds need no distance field"); };
+    const BoundingBoxf3 box(Vec3d::Constant(-8.), Vec3d::Constant(8.));
+    std::set<const Voronoi::PointCloudProvider *> providers;
+    for (const auto method : {VoronoiCloudMethod::Random, VoronoiCloudMethod::Fcc, VoronoiCloudMethod::Cubic}) {
+        const Voronoi::PointCloudSettings settings{{AdaptiveInfillMode::Disabled, 0., 0.25, 0.05, AdaptiveInfillGradient::Linear}, 0., method};
+        const auto cloud = cache.get(slices, settings);
+        REQUIRE(providers.insert(cloud.get()).second);
+        REQUIRE(cache.get(slices, settings) == cloud);
+        const auto expected = method == VoronoiCloudMethod::Random ? Voronoi::PoissonPointCloud().points_in(box, 2.) :
+            Voronoi::LatticePointCloud(method).points_in(box, 2.);
+        REQUIRE(cloud->points_in(box, 2.) == expected);
     }
 }

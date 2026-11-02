@@ -1,5 +1,6 @@
 #include "InfillDensityField.hpp"
 #include "ExPolygon.hpp"
+#include "VoronoiCloudMethod.hpp"
 #include "Config.hpp"
 #include "Exception.hpp"
 #include "Line.hpp"
@@ -1420,6 +1421,7 @@ Voronoi::PointCloudSettings PrintObject::voronoi_cloud_settings(const PrintRegio
     Voronoi::PointCloudSettings settings;
     settings.density = InfillDensitySettings::from_config(config);
     settings.site_spacing = voronoi_site_spacing(region);
+    settings.method = config.voronoi_cloud_method.value;
     return settings;
 }
 
@@ -1837,6 +1839,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "infill_overhang_angle") {
             steps.emplace_back(posInfill);
         } else if (opt_key == "sparse_infill_pattern"
+                   || opt_key == "voronoi_cloud_method"
                    || opt_key == "infill_smoothing_sigma"
                    || opt_key == "adaptive_infill_mode"
                    || opt_key == "adaptive_infill_interior_density"

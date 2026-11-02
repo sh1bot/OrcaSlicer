@@ -10,12 +10,14 @@
 #include "../InfillDensityField.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "VoronoiPointCloud.hpp"
+#include "../VoronoiCloudMethod.hpp"
 
 namespace Slic3r::Voronoi {
 
 struct PointCloudSettings {
     InfillDensitySettings density;
     double site_spacing = 0.;
+    VoronoiCloudMethod method = VoronoiCloudMethod::Random;
 };
 
 // Owned by a PrintObject. Initialization is serialized; providers and distance
@@ -29,7 +31,7 @@ public:
 private:
     std::mutex m_mutex;
     InfillDensityCache m_fields;
-    std::map<std::tuple<AdaptiveInfillMode, double, double, double, AdaptiveInfillGradient>, std::shared_ptr<const PointCloudProvider>> m_providers;
+    std::map<std::tuple<AdaptiveInfillMode, double, double, VoronoiCloudMethod, double, AdaptiveInfillGradient>, std::shared_ptr<const PointCloudProvider>> m_providers;
 };
 
 } // namespace Slic3r::Voronoi

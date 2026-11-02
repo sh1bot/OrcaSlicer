@@ -5,6 +5,7 @@
 #include "Fill/AdaptiveInfillField.hpp"
 #include "BoundingBox.hpp"
 #include "PrintConfig.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
