@@ -1493,6 +1493,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionPercent,              sparse_infill_density))
     ((ConfigOptionEnum<InfillPattern>,  sparse_infill_pattern))
     ((ConfigOptionEnum<VoronoiCloudMethod>, voronoi_cloud_method))
+    ((ConfigOptionFloat,                infill_modifier_blend))
     ((ConfigOptionFloat,                infill_smoothing_sigma))
     ((ConfigOptionPercent,              sparse_infill_smooth_factor))
     ((ConfigOptionFloat,                lateral_lattice_angle_1))
