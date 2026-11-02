@@ -461,7 +461,9 @@ public:
     size_t 			total_layer_count() const { return this->layer_count() + this->support_layer_count(); }
     size_t 			layer_count() const { return m_layers.size(); }
     void 			clear_layers();
+    std::shared_ptr<const InfillDensityField> infill_density_field(const InfillDensitySettings &settings) const;
     WallDistanceProgress infill_preparation_progress() const;
+    bool needs_signed_infill_distances() const;
     bool prepare_infill_point_clouds();
     double voronoi_site_spacing(const PrintRegion &region) const;
     Voronoi::PointCloudSettings voronoi_cloud_settings(const PrintRegion &region) const;
