@@ -80,7 +80,6 @@
 
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_invoke.h>
-#include <tbb/task_arena.h>
 #include <tbb/spin_mutex.h>
 #include <tbb/concurrent_unordered_set.h>
 
@@ -821,13 +820,8 @@ static bool uses_voronoi(const PrintObject &object)
     return false;
 }
 
-static size_t infill_layer_grain_size(size_t count, bool reuse_network)
-{
-    // Balance network reuse against enough batches to occupy the available workers.
-    constexpr size_t maximum_batch = 16;
-    const size_t tasks = 2 * size_t(tbb::this_task_arena::max_concurrency());
-    return reuse_network ? std::min(maximum_batch, std::max(size_t(1), (count + tasks - 1) / tasks)) : 1;
-}
+// Amortize network construction across neighboring layers.
+static constexpr size_t voronoi_layer_grain_size = 16;
 
 void PrintObject::infill()
 {
@@ -843,7 +837,7 @@ void PrintObject::infill()
         std::mutex progress_mutex;
         auto last_report = std::chrono::steady_clock::now();
 
-        const size_t layer_grain_size = infill_layer_grain_size(m_layers.size(), has_voronoi);
+        const size_t layer_grain_size = has_voronoi ? voronoi_layer_grain_size : 1;
         BOOST_LOG_TRIVIAL(debug) << "Filling layers in parallel - start";
         tbb::parallel_for(
             tbb::blocked_range<size_t>(0, m_layers.size(), layer_grain_size),
@@ -3418,7 +3412,7 @@ void PrintObject::bridge_over_infill()
 
         const bool has_voronoi = uses_voronoi(*this);
         tbb::parallel_for(tbb::blocked_range<size_t>(0, layers_to_generate_infill.size(),
-            infill_layer_grain_size(layers_to_generate_infill.size(), has_voronoi)), [po = static_cast<const PrintObject *>(this),
+            has_voronoi ? voronoi_layer_grain_size : 1), [po = static_cast<const PrintObject *>(this),
                                                                                             &layers_to_generate_infill,
                                                                                             &infill_lines](tbb::blocked_range<size_t> r) {
             PRINT_OBJECT_TIME_LIMIT_MILLIS(PRINT_OBJECT_TIME_LIMIT_DEFAULT);

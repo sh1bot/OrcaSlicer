@@ -1127,3 +1127,22 @@ TEST_CASE("Voronoi cell coordinates fill the cube independently", "[FillVoronoi]
     for (size_t count : octants)
         REQUIRE_THAT(double(count), Catch::Matchers::WithinRel(double(sites.size()) / 8., 0.1));
 }
+
+TEST_CASE("Voronoi distinguishes duplicate sites from ambiguous power sites", "[FillVoronoi]")
+{
+    const bool mirrored = GENERATE(false, true);
+    const size_t duplicates = GENERATE(size_t(1), size_t(4));
+    const BoundingBox bounds(Point::new_scale(-10., -10.), Point::new_scale(10., 10.));
+    std::vector<Vec3d> sites {Vec3d(-2., -1., 0.), Vec3d(2., -1., 0.)};
+    for (size_t i = 0; i < duplicates; ++i) sites.emplace_back(0., 2., 1.);
+    if (mirrored) sites.emplace_back(0., 2., -1.);
+    for (size_t i = 0; i < sites.size(); ++i) {
+        std::rotate(sites.begin(), sites.begin() + 1, sites.end());
+        const auto section = Voronoi::section(sites, bounds, 0.);
+        REQUIRE(section.walls.size() == 3);
+        REQUIRE(section.junctions.size() == (mirrored ? 0 : 1));
+        if (!mirrored)
+            for (const Vec3d &site : section.junctions.front().sites)
+                REQUIRE(site.z() >= 0.);
+    }
+}
